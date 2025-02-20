@@ -6,7 +6,7 @@
   "scripts": {
     "start": "webpack serve --open --config ./webpack/webpack.dev.js",
     "build": "webpack --config ./webpack/webpack.prod.js",
-    "deploy": "npm run build && node deploy.js",
+    "deploy": "npm run build && node ./src/deploy.js",
     "test": "npx jest"
   },
   "author": "tea2x",
