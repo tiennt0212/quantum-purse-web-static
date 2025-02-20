@@ -8,7 +8,7 @@ import {
   hexToInt,
   insertWitnessPlaceHolder,
   prepareSphincsPlusSigningEntries,
-  hexStringToUint8Array
+  hexStringToUint8Array,
 } from "./utils";
 import { scriptToAddress } from "@nervosnetwork/ckb-sdk-utils";
 import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
