@@ -10,7 +10,7 @@ class KeyManager {
   private static IV_LENGTH = 12; // 96-bit IV for AES-GCM
 
   public static DB_MASTER_KEY = "masterKey";
-  public static DB_CHILD_KEYS = "childKey";
+  public static DB_CHILD_KEYS = "childKeys";
 
   constructor() {}
 
