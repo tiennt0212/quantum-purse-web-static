@@ -9,10 +9,22 @@ class KeyManager {
   private static SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 };
   private static IV_LENGTH = 12; // 96-bit IV for AES-GCM
 
-  public static STORAGE_KEY_MASTER_KEY = "masterKey";
-  public static STORAGE_KEY_CHILD_KEY = "childKey";
+  public static DB_MASTER_KEY = "masterKey";
+  public static DB_CHILD_KEY = "childKey";
 
   constructor() {}
+
+  /**
+   * Cleans the localStorage by removing all keys associated with this application.
+   * @returns void
+   */
+  public cleanStorage(): void {
+    // Remove specific keys used by your application
+    localStorage.removeItem(KeyManager.DB_MASTER_KEY);
+    localStorage.removeItem(KeyManager.DB_CHILD_KEY);
+    
+    console.log("LocalStorage keys cleaned.");
+  }
 
   /**
    * Generate a new 24 word seed phrase for max 256bit security.
@@ -25,12 +37,12 @@ class KeyManager {
   /**
    * This function Encrypts input data and store the encrypted in local device.
    * At this point, validation for a strong password MUST be done beforehand.
-   * @param password - The password used to encrypt the seedphrase.
+   * @param password - The password used to encrypt the input data.
    * @param input - The data to be encrypted.
-   * @param storageKey - The key in k-v storage.
+   * @param dbKey - The key in k-v storage.
    * @returns none
    */
-  public async encryptAndStore(password: Uint8Array, input: Uint8Array, storageKey: string) {
+  public async encryptAndStore(password: Uint8Array, input: Uint8Array, dbKey: string) {
     // Generate salt, iv
     const salt = new Uint8Array(KeyManager.SALT_LENGTH);
     const iv = new Uint8Array(KeyManager.IV_LENGTH);
@@ -64,7 +76,7 @@ class KeyManager {
     });
   
     // Store locally
-    localStorage.setItem(storageKey, storageVal);
+    localStorage.setItem(dbKey, storageVal);
   
     // Zero out sensitive buffers
     password.fill(0);
@@ -75,14 +87,14 @@ class KeyManager {
    * Loads and decrypts the encrypted data using AES-GCM and a password-derived key.
    *
    * @param password - The user's password in Uint8Array format.
-   * @param storageKey - The key in k-v storage.
+   * @param dbKey - The key in k-v storage.
    * @returns {Promise<Uint8Array | null>} - The decrypted data.
    *
    * @throws {Error} - If decryption fails due to incorrect password or corrupted data.
    */
-  public async loadAndDecrypt(password: Uint8Array, storageKey: string): Promise<Uint8Array | null> {
+  public async loadAndDecrypt(password: Uint8Array, dbKey: string): Promise<Uint8Array | null> {
     // Retrieve encrypted data from storage
-    const storageVal = localStorage.getItem(storageKey);
+    const storageVal = localStorage.getItem(dbKey);
     if (!storageVal) {
       return null; // No data found
     }
@@ -124,11 +136,11 @@ class KeyManager {
   }
 
   /**
-   * Create a new account derived from a wallet's seed phrase
+   * Create a new account derived from the wallet's seed phrase
    * @returns Account object
    */
   public async createAccount(password: Uint8Array) {
-    const storedEncryptedKeys = localStorage.getItem(KeyManager.STORAGE_KEY_CHILD_KEY);
+    const storedEncryptedKeys = localStorage.getItem(KeyManager.DB_CHILD_KEY);
     console.log(">>>mark1 | storedEncryptedKeys: ", storedEncryptedKeys);
     let encryptedKeys = [];
     if (storedEncryptedKeys) {
@@ -140,7 +152,7 @@ class KeyManager {
     console.log(">>>mark3 | path: ", path);
 
     // load up seed and decrypt
-    const seed = await this.loadAndDecrypt(password, KeyManager.STORAGE_KEY_MASTER_KEY);
+    const seed = await this.loadAndDecrypt(password, KeyManager.DB_MASTER_KEY);
 
     if (!seed)
       throw new Error('Seed decryption failed');
@@ -149,7 +161,7 @@ class KeyManager {
     const sphincsSeed = await scryptAsync(seed, path, KeyManager.SCRYPT_PARAMS_FOR_KDF);
     
     // encrypt key and store it
-    await this.encryptAndStore(password, sphincsSeed, KeyManager.STORAGE_KEY_CHILD_KEY);
+    await this.encryptAndStore(password, sphincsSeed, KeyManager.DB_CHILD_KEY);
 
     // Zero out the sensitive data
     password.fill(0);
