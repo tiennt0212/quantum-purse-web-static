@@ -1,9 +1,8 @@
-
 import { execSync } from "child_process";
 import { transfer } from "../core/transaction_builder";
-
 import QuantumPurse from "../core/fips205_signer";
 import { sendTransaction } from "../core/utils";
+
 const CKB_INDEXER_URL = "http://localhost:8114/indexer";
 const NODE_URL = "http://localhost:8114";
 
@@ -22,35 +21,33 @@ describe("Integration Test for Quantum Purse", () => {
     wallet = QuantumPurse.getInstance();
     QPAddress = wallet.getAddress();
 
-    console.log("👉 Building QR locks cript...");
+    console.log("[INFO] Building QR lock script...");
     execSync("make build", { cwd: "rust-quantum-resistant-lock-script", stdio: "inherit" });
 
-    console.log("👉 Starting CKB node...");
-    execSync("bash src/__tests__/start_ckb_node.sh", { stdio: "inherit" });
+    console.log("[INFO] Starting CKB node...");
+    execSync("bash src/test/start_ckb_node.sh", { stdio: "inherit" });
 
-    console.log("👉 Loading up CKB for test account...");
-    const loadingUpTxHash = execSync(`bash src/__tests__/load_up_test_account.sh ${QPAddress} 2>&1`, {
+    console.log("[INFO] Loading up CKB for test account...");
+    const loadingUpTxHash = execSync(`bash src/test/load_up_test_account.sh ${QPAddress} 2>&1`, {
       encoding: "utf-8",
       stdio: ["inherit", "pipe", "pipe"],
     }).trim();
 
-    console.log("👉 Deploying QR lock script...");
-    const deployedTxHash = execSync("bash src/__tests__/deploy_qr_lock_script.sh 2>&1", {
+    console.log("[INFO] Deploying QR lock script...");
+    const deployedTxHash = execSync("bash src/test/deploy_qr_lock_script.sh 2>&1", {
       encoding: "utf-8",
       stdio: ["inherit", "pipe", "pipe"],
     }).trim();
   });
 
   test("Pass - Unlocking a sphincs+ protected cell", async () => {
-    
     let tx = await transfer(QPAddress, testAccount.account, "200");
     const signedTx = wallet.sign(tx);
-    let txId = await sendTransaction(NODE_URL, signedTx);
-    console.log("👉 Running contract tests...");
+    await sendTransaction(NODE_URL, signedTx);
   });
 
   afterAll(() => {
-    console.log("👉 Terminating CKB test node...");
+    console.log("[INFO] Terminating CKB test node...");
     execSync("docker kill ckb-test-node >/dev/null 2>&1 || true", { stdio: "inherit" });
     execSync("docker rm ckb-test-node >/dev/null 2>&1 || true", { stdio: "inherit" });
   });
