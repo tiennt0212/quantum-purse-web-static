@@ -1,0 +1,13 @@
+import './styles.css'
+import Icon from './icon.png';
+
+// Add title
+const text: string = 'A quantum resistant wallet for ckb blockchain'
+const $content = document.querySelector('#content')
+$content.textContent = text
+
+// ass the icon.
+const myIcon = new Image();
+myIcon.src = Icon;
+
+document.body.appendChild(myIcon);
