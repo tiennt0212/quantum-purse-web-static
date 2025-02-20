@@ -4,7 +4,9 @@ import Icon from './icon.png';
 // Add title
 const text: string = 'A quantum resistant wallet for ckb blockchain'
 const $content = document.querySelector('#content')
-$content.textContent = text
+if ($content) {
+  $content.textContent = text;
+}
 
 // ass the icon.
 const myIcon = new Image();
