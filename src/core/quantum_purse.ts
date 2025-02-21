@@ -74,7 +74,6 @@ class QuantumPurse {
 
   /**
    * Private constructor to enforce singleton pattern.
-   * @param devKey - Development key for initial setup. TODO Should be replaced with secure key generation in production.
    * @param sphincsCodeHash - The code hash for the SPHINCS+ lock script.
    * @param sphincsHashType - The hash type for the SPHINCS+ lock script.
    */
@@ -281,7 +280,6 @@ class QuantumPurse {
       ["decrypt"]
     );
 
-    //TODO check
     try {
       // Decrypt the cipherText
       const decryptedData = await globalThis.crypto.subtle.decrypt(
@@ -296,7 +294,6 @@ class QuantumPurse {
       return new Uint8Array(decryptedData);
     } catch (error) {
       console.error("Decryption failed:", error);
-      //TODO check null/undefined
       return null;
     }
   }
@@ -314,7 +311,8 @@ class QuantumPurse {
    * Overwrite the encrypted masterseed in local storage.
    * @param input - The encrypted input data.
    * @returns none
-   * TODO add warning
+   * @warning This function will override the existing seed phrase.
+   * Be careful and ensure users are warned before triggering this operation.
    */
   public dbSetMaster(input: EncryptionPacket) {
     localStorage.setItem(QuantumPurse.DB_MASTER_KEY, JSON.stringify(input));
@@ -324,7 +322,6 @@ class QuantumPurse {
    * Overwrite the encrypted masterseed in local storage.
    * @param input - The encrypted input data.
    * @returns none
-   * TODO add warning
    */
   public dbGetMaster(): EncryptionPacket | undefined {
     const localData = localStorage.getItem(QuantumPurse.DB_MASTER_KEY);
@@ -443,7 +440,6 @@ class QuantumPurse {
 
     const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
     sphincsPlusKey.secretKey.fill(0);
-    console.log(">>>sphincsPlusKey: ", sphincsPlusKey);
 
     // encrypt key and store
     const encryptedChild = await this.encrypt(password, sphincsSeed);
