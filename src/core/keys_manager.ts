@@ -3,6 +3,18 @@ import { wordlist } from "@scure/bip39/wordlists/english";
 import { scryptAsync } from "@noble/hashes/scrypt";
 import { hexStringToUint8Array, uint8ArrayToHexString } from "./utils";
 
+interface EncryptionPacket {
+  salt: string;
+  iv: string;
+  cipherText: string;
+}
+interface PublicSphincs {
+  sphincsPlusPubKey: string;
+  packet: EncryptionPacket;
+}
+
+type DBKey = typeof KeyManager.DB_MASTER_KEY | typeof KeyManager.DB_CHILD_KEYS;
+
 class KeyManager {
   private static SALT_LENGTH = 16; // 128-bit salt
   private static SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 };
@@ -15,16 +27,6 @@ class KeyManager {
   constructor() {}
 
   /**
-   * Cleans the localStorage by removing all keys associated with this application.
-   * @returns void
-   */
-  public cleanStorage(): void {
-    // Remove specific keys used by your application
-    localStorage.removeItem(KeyManager.DB_MASTER_KEY);
-    localStorage.removeItem(KeyManager.DB_CHILD_KEYS);
-  }
-
-  /**
    * Generate a new 24 word seed phrase for max 256bit security.
    * @returns seed phrase object
    */
@@ -33,18 +35,16 @@ class KeyManager {
   }
 
   /**
-   * This function Encrypts input data and store the encrypted in local device.
+   * This function Encrypts input data with AES-GCM.
    * At this point, validation for a strong password MUST be done beforehand.
    * @param password - The password used to encrypt the input data.
    * @param input - The data to be encrypted.
-   * @param dbKey - The key in k-v storage.
-   * @returns none
+   * @returns an object type of EncryptionPacket
    */
-  public async encryptAndStore(
+  public async encrypt(
     password: Uint8Array,
-    input: Uint8Array,
-    dbKey: string
-  ) {
+    input: Uint8Array
+  ): Promise<EncryptionPacket> {
     // Generate salt, iv
     const salt = new Uint8Array(KeyManager.SALT_LENGTH);
     const iv = new Uint8Array(KeyManager.IV_LENGTH);
@@ -57,6 +57,9 @@ class KeyManager {
       salt,
       KeyManager.SCRYPT_PARAMS_FOR_SEED
     );
+
+    // zero fill
+    password.fill(0);
 
     // Import key for AES-GCM encryption
     const cryptoKey = await globalThis.crypto.subtle.importKey(
@@ -74,58 +77,31 @@ class KeyManager {
       input
     );
 
+    // zero fill
+    input.fill(0);
+
     // build store packet
-    const packet = {
+    return {
       salt: uint8ArrayToHexString(salt),
       iv: uint8ArrayToHexString(iv),
-      ciphertext: uint8ArrayToHexString(new Uint8Array(encryptedData)),
+      cipherText: uint8ArrayToHexString(new Uint8Array(encryptedData)),
     };
-
-    // Retrieve existing data from local storage
-    const localData = localStorage.getItem(dbKey);
-    let packets = localData ? JSON.parse(localData) : [];
-
-    // Append the new store structure
-    packets.push(packet);
-
-    // Store locally
-    localStorage.setItem(dbKey, JSON.stringify(packets));
-
-    // Zero out sensitive buffers
-    password.fill(0);
-    input.fill(0);
   }
 
   /**
-   * Loads and decrypts the encrypted data using AES-GCM and a password-derived key.
-   *
+   * Decrypts the encrypted data using AES-GCM.
    * @param password - The user's password in Uint8Array format.
-   * @param dbKey - The key in k-v storage.
-   * @param index - The index of the encrypted data in the array (default: 0).
+   * @param packet - The encrypted data packet.
    * @returns {Promise<Uint8Array | null>} - The decrypted data.
-   *
    * @throws {Error} - If decryption fails due to incorrect password or corrupted data.
    */
-  public async loadAndDecrypt(
+  public async decrypt(
     password: Uint8Array,
-    dbKey: string,
-    index: number = 0
+    packet: EncryptionPacket
   ): Promise<Uint8Array | null> {
-    // Retrieve encrypted data from storage
-    const localData = localStorage.getItem(dbKey);
-    if (!localData) {
-      return null; // No data found
-    }
-
-    const packets = JSON.parse(localData);
-    if (!Array.isArray(packets) || index >= packets.length) {
-      return null; // Invalid data or index
-    }
-
-    const packet = packets[index];
     const salt = hexStringToUint8Array(packet.salt);
     const iv = hexStringToUint8Array(packet.iv);
-    const ciphertext = hexStringToUint8Array(packet.ciphertext);
+    const cipherText = hexStringToUint8Array(packet.cipherText);
 
     // Derive the scrypt key
     const key = await scryptAsync(
@@ -143,12 +119,13 @@ class KeyManager {
       ["decrypt"]
     );
 
+    //TODO check
     try {
-      // Decrypt the ciphertext
+      // Decrypt the cipherText
       const decryptedData = await globalThis.crypto.subtle.decrypt(
         { name: "AES-GCM", iv: iv },
         cryptoKey,
-        ciphertext
+        cipherText
       );
 
       // Zero out the sensitive data
@@ -157,7 +134,115 @@ class KeyManager {
       return new Uint8Array(decryptedData);
     } catch (error) {
       console.error("Decryption failed:", error);
+      //TODO check null/undefined
       return null;
+    }
+  }
+
+  /**
+   * Cleans the localStorage.
+   * @returns void
+   */
+  public dbClear(): void {
+    localStorage.clear();
+  }
+
+  /**
+   * Overwrite the encrypted masterseed in local storage.
+   * @param input - The encrypted input data.
+   * @returns none
+   * TODO add warning
+   */
+  public dbSetMaster(input: EncryptionPacket) {
+    localStorage.setItem(KeyManager.DB_MASTER_KEY, JSON.stringify(input));
+  }
+
+  /**
+   * Overwrite the encrypted masterseed in local storage.
+   * @param input - The encrypted input data.
+   * @returns none
+   * TODO add warning
+   */
+  public dbGetMaster(): EncryptionPacket | undefined {
+    const localData = localStorage.getItem(KeyManager.DB_MASTER_KEY);
+    if (!localData) {
+      return undefined;
+    }
+    return JSON.parse(localData);
+  }
+
+  /**
+   * Store the encrypted data in local storage.
+   * @param input - The encrypted input data.
+   * @returns none
+   */
+  public dbSetChild(input: PublicSphincs) {
+    const dbKey = KeyManager.DB_CHILD_KEYS;
+    const localData = localStorage.getItem(dbKey);
+    let packets: PublicSphincs[] = localData ? JSON.parse(localData) : [];
+
+    // Check if the sphincsPlusPubKey already exists in the stored packets
+    const keyExists = packets.some(
+      (packet) => packet.sphincsPlusPubKey === input.sphincsPlusPubKey
+    );
+
+    // If the key already exists, return
+    if (keyExists) {
+      return;
+    }
+
+    // Append the new store structure
+    packets.push(input);
+
+    // Store locally
+    localStorage.setItem(dbKey, JSON.stringify(packets));
+  }
+
+  /**
+   * Retrieve encrypted data from local storage.
+   * @param key - Optional sphincsPlusPubKey to retrieve a single PublicSphincs object.
+   * @returns A single PublicSphincs object (or undefined) if key is specified.
+   */
+  public dbGetChild(key: string): PublicSphincs[] | PublicSphincs | undefined {
+    const dbKey = KeyManager.DB_CHILD_KEYS;
+    try {
+      const localData = localStorage.getItem(dbKey);
+      if (!localData) {
+        return key ? undefined : [];
+      }
+
+      const packets: PublicSphincs[] = JSON.parse(localData);
+
+      if (key) {
+        return packets.find((packet) => packet.sphincsPlusPubKey === key);
+      }
+
+      return packets;
+    } catch (error) {
+      console.error(`Failed to retrieve data for key ${dbKey}:`, error);
+      return key ? undefined : [];
+    }
+  }
+
+  /**
+   * Retrieve all encrypted account data from local storage.
+   * @returns An array of PublicSphincs objects if no key is provided,
+   * or a single PublicSphincs object (or undefined) if key is specified.
+   */
+  public dbGetChilds(): PublicSphincs[] | PublicSphincs | undefined {
+    const dbKey = KeyManager.DB_CHILD_KEYS;
+    try {
+      const localData = localStorage.getItem(dbKey);
+      if (!localData) {
+        return [];
+      }
+
+      const packets: PublicSphincs[] = JSON.parse(localData);
+
+      return packets;
+    } catch (error) {
+      console.error(`Failed to retrieve data for key ${dbKey}:`, error);
+      return [];
     }
   }
 
@@ -166,19 +251,21 @@ class KeyManager {
    * @returns Account object
    */
   public async createAccount(password: Uint8Array) {
-    const localKeys = localStorage.getItem(KeyManager.DB_CHILD_KEYS);
-    console.log(">>>mark1 | localKeys: ", localKeys);
-    let packets = [];
-    if (localKeys) {
-      console.log(">>>mark2");
-      packets = JSON.parse(localKeys);
-    }
-
-    const path = `pq/ckb/${packets.length}`;
+    const localData = this.dbGetChild(
+      KeyManager.DB_CHILD_KEYS
+    ) as PublicSphincs[];
+    const path = `pq/ckb/${localData.length}`;
+    console.log(">>>mark1 | localData: ", localData);
     console.log(">>>mark3 | path: ", path);
 
     // load up seed and decrypt
-    const seed = await this.loadAndDecrypt(password, KeyManager.DB_MASTER_KEY);
+    const encryptedSeedObj = this.dbGetMaster();
+
+    if (!encryptedSeedObj) {
+      throw new Error("Master seed not found");
+    }
+
+    const seed = await this.decrypt(password, encryptedSeedObj);
 
     if (!seed) throw new Error("Seed decryption failed");
 
@@ -189,8 +276,9 @@ class KeyManager {
       KeyManager.SCRYPT_PARAMS_FOR_KDF
     );
 
+    // TODO complete when merge with fip205 class
     // encrypt key and store it
-    await this.encryptAndStore(password, sphincsSeed, KeyManager.DB_CHILD_KEYS);
+    const encryptedChild = await this.encrypt(password, sphincsSeed);
 
     // Zero out the sensitive data
     password.fill(0);
