@@ -347,7 +347,7 @@ export function hexStringToUint8Array(hex: string): Uint8Array {
  * @returns A hex string.
  */
 export function uint8ArrayToHexString(arr: Uint8Array): string {
-  return Array.from(arr)
+  return "0x" + Array.from(arr)
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('');
 }

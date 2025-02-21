@@ -1,9 +1,9 @@
-import { DEV_KEY, SPHINCSPLUS_LOCK } from "./config";
-import { Script, HashType, utils, Transaction } from "@ckb-lumos/base";
-const { ckbHash } = utils;
-import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
-import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
-import { Reader } from "ckb-js-toolkit";
+import {
+  CKB_INDEXER_URL,
+  NODE_URL,
+  IS_MAIN_NET,
+  SPHINCSPLUS_LOCK,
+} from "./config";
 import {
   hexToInt,
   insertWitnessPlaceHolder,
@@ -11,13 +11,18 @@ import {
   hexStringToUint8Array,
   uint8ArrayToHexString,
 } from "./utils";
+import { Reader } from "ckb-js-toolkit";
 import { scriptToAddress } from "@nervosnetwork/ckb-sdk-utils";
-import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 import { CellCollector, Indexer } from "@ckb-lumos/ckb-indexer";
-import { CKB_INDEXER_URL, NODE_URL, IS_MAIN_NET } from "./config";
+import { Script, HashType, utils, Transaction } from "@ckb-lumos/base";
+import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
+import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
 import * as bip39 from "@scure/bip39";
-import { wordlist } from "@scure/bip39/wordlists/english";
 import { scryptAsync } from "@noble/hashes/scrypt";
+import { wordlist } from "@scure/bip39/wordlists/english";
+import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
+
+const { ckbHash } = utils;
 
 interface EncryptionPacket {
   salt: string;
@@ -28,16 +33,14 @@ interface PublicSphincs {
   sphincsPlusPubKey: string;
   packet: EncryptionPacket;
 }
-
 type DBKey =
   | typeof QuantumPurse.DB_MASTER_KEY
   | typeof QuantumPurse.DB_CHILD_KEYS;
 
-type Key = { pubkey: Uint8Array; prikey: Uint8Array };
-
 /**
- * QuantumPurse class provides functionalities for managing a wallet using the SPHINCS+ post-quantum signature scheme.
- * It ensures that only one instance of the wallet is active during its uptime. By this wallet it is targeting
+ * QuantumPurse class provides functionalities for managing a wallet using
+ * the SPHINCS+ post-quantum signature scheme. It ensures that only one instance
+ * of the wallet is active during its uptime. By this wallet it is targeting
  * shake-128f simple algorithm configuration
  */
 class QuantumPurse {
@@ -56,19 +59,15 @@ class QuantumPurse {
   // Indexer for blockchain interactions
   private indexer: Indexer;
 
-  // Private key for Sphincs+ signing operations
-  private privateKey: Uint8Array;
-
-  // Public key for Sphincs+ verification purposes
-  public publicKey: Uint8Array;
+  private signer?: PublicSphincs;
 
   // SPHINCS+ lock script details
   public sphincsLock: { codeHash: string; hashType: HashType };
 
-  private static SALT_LENGTH = 16; // 128-bit salt
-  private static SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 };
-  private static SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 };
-  private static IV_LENGTH = 12; // 96-bit IV for AES-GCM
+  private SALT_LENGTH = 16; // 128-bit salt
+  private SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 };
+  private SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 };
+  private IV_LENGTH = 12; // 96-bit IV for AES-GCM
 
   public static DB_MASTER_KEY = "masterKey";
   public static DB_CHILD_KEYS = "childKeys";
@@ -79,14 +78,8 @@ class QuantumPurse {
    * @param sphincsCodeHash - The code hash for the SPHINCS+ lock script.
    * @param sphincsHashType - The hash type for the SPHINCS+ lock script.
    */
-  private constructor(
-    devKey: Key,
-    sphincsCodeHash: string,
-    sphincsHashType: HashType
-  ) {
+  private constructor(sphincsCodeHash: string, sphincsHashType: HashType) {
     this.indexer = new Indexer(CKB_INDEXER_URL, NODE_URL);
-    this.privateKey = devKey.prikey;
-    this.publicKey = devKey.pubkey;
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
   }
 
@@ -97,7 +90,6 @@ class QuantumPurse {
   public static getInstance(): QuantumPurse {
     if (!QuantumPurse.instance) {
       QuantumPurse.instance = new QuantumPurse(
-        DEV_KEY,
         SPHINCSPLUS_LOCK.codeHash,
         SPHINCSPLUS_LOCK.hashType as HashType
       );
@@ -106,26 +98,17 @@ class QuantumPurse {
   }
 
   /**
-   * Generates a new key pair for the wallet. TODO to replace DEV_KEY.
-   */
-  private generateKey() {
-    // Be sure to use a secure random number generator
-    const seed = new Uint8Array(QuantumPurse.ENTROPY_LEN);
-    globalThis.crypto.getRandomValues(seed);
-    const keys = slh_dsa_shake_128f.keygen(seed);
-    this.publicKey = keys.publicKey;
-    this.privateKey = keys.secretKey;
-  }
-
-  /**
    * Generates the lock script for this wallet instance.
    * @returns The lock script object.
    */
-  private getLockScript(): Script {
+  private getLockScript(): Script | undefined {
+    if (!this.signer) {
+      throw new Error("Signer not available");
+    }
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
-      args: ckbHash(this.publicKey),
+      args: ckbHash(this.signer.sphincsPlusPubKey),
     };
   }
 
@@ -144,22 +127,35 @@ class QuantumPurse {
    * @param tx - The transaction skeleton to sign.
    * @returns The sealed transaction with signatures.
    */
-  public sign(tx: TransactionSkeletonType): Transaction {
+  public async sign(
+    tx: TransactionSkeletonType,
+    password: Uint8Array
+  ): Promise<Transaction> {
+    if (!this.signer) {
+      throw new Error("No signer found");
+    }
+
     let witnessLen =
-      QuantumPurse.SHAKE_128F_SIMPLE_SIG_LEN + this.publicKey.length;
+      QuantumPurse.SHAKE_128F_SIMPLE_SIG_LEN +
+      this.signer.sphincsPlusPubKey.length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
     const signingEntries = tx.get("signingEntries").toArray();
+    const privatekey = await this.decrypt(password, this.signer.packet);
+    if (!privatekey) {
+      throw new Error("Failed to decrypt private key");
+    }
     const signature = slh_dsa_shake_128f.sign(
-      this.privateKey,
+      privatekey,
       hexStringToUint8Array(signingEntries[0].message),
       this.genNonce()
     );
+    privatekey.fill(0); // zero fill
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
     const serializedPublicKey = new Reader(
-      this.publicKey.buffer
+      hexStringToUint8Array(this.signer.sphincsPlusPubKey).buffer
     ).serializeJson();
 
     const witness =
@@ -173,7 +169,11 @@ class QuantumPurse {
    * @returns The address as a string.
    */
   public getAddress(): string {
-    return scriptToAddress(this.getLockScript(), IS_MAIN_NET);
+    const lock = this.getLockScript();
+    if (!lock) {
+      throw new Error("No lock script found");
+    }
+    return scriptToAddress(lock, IS_MAIN_NET);
   }
 
   /**
@@ -200,7 +200,7 @@ class QuantumPurse {
    * Generate a new 24 word seed phrase for max 256bit security.
    * @returns seed phrase object
    */
-  public generateSeedPhrase(): string {
+  public static generateSeedPhrase(): string {
     return bip39.generateMnemonic(wordlist, 256);
   }
 
@@ -216,17 +216,13 @@ class QuantumPurse {
     input: Uint8Array
   ): Promise<EncryptionPacket> {
     // Generate salt, iv
-    const salt = new Uint8Array(QuantumPurse.SALT_LENGTH);
-    const iv = new Uint8Array(QuantumPurse.IV_LENGTH);
+    const salt = new Uint8Array(this.SALT_LENGTH);
+    const iv = new Uint8Array(this.IV_LENGTH);
     globalThis.crypto.getRandomValues(salt);
     globalThis.crypto.getRandomValues(iv);
 
     // Derive scrypt key
-    const key = await scryptAsync(
-      password,
-      salt,
-      QuantumPurse.SCRYPT_PARAMS_FOR_SEED
-    );
+    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_SEED);
 
     // zero fill
     password.fill(0);
@@ -274,11 +270,7 @@ class QuantumPurse {
     const cipherText = hexStringToUint8Array(packet.cipherText);
 
     // Derive the scrypt key
-    const key = await scryptAsync(
-      password,
-      salt,
-      QuantumPurse.SCRYPT_PARAMS_FOR_SEED
-    );
+    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_SEED);
 
     // Import key for decryption
     const cryptoKey = await globalThis.crypto.subtle.importKey(
@@ -313,8 +305,9 @@ class QuantumPurse {
    * Cleans the localStorage.
    * @returns void
    */
-  public dbClear(): void {
-    localStorage.clear();
+  public dbClear(dbKey: DBKey): void {
+    // localStorage.clear();
+    localStorage.removeItem(dbKey);
   }
 
   /**
@@ -418,12 +411,13 @@ class QuantumPurse {
 
   /**
    * Create a new account derived from the wallet's seed phrase
+   * The derivation path is in the format of pq/ckb/{index}.
    * @returns Account object
    */
   public async createAccount(password: Uint8Array) {
-    const localData = this.dbGetChild(
-      QuantumPurse.DB_CHILD_KEYS
-    ) as PublicSphincs[];
+    const localData = this.dbGetChilds() as PublicSphincs[];
+
+    console.log(">>>localData: ", localData);
     const path = `pq/ckb/${localData.length}`;
     console.log(">>>mark1 | localData: ", localData);
     console.log(">>>mark3 | path: ", path);
@@ -439,16 +433,27 @@ class QuantumPurse {
 
     if (!seed) throw new Error("Seed decryption failed");
 
-    // Derive 48-byte key using scrypt for sphincs+ key gen, using path as salt for determinism
+    // Derive 48-byte key using scrypt for sphincs+ key gen.
+    // Here we're using path as salt to achieve determinism
     const sphincsSeed = await scryptAsync(
       seed,
       path,
-      QuantumPurse.SCRYPT_PARAMS_FOR_KDF
+      this.SCRYPT_PARAMS_FOR_KDF
     );
 
-    // TODO complete when merge with fip205 class
-    // encrypt key and store it
+    const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
+    sphincsPlusKey.secretKey.fill(0);
+    console.log(">>>sphincsPlusKey: ", sphincsPlusKey);
+
+    // encrypt key and store
     const encryptedChild = await this.encrypt(password, sphincsSeed);
+    const currentAccount = {
+      sphincsPlusPubKey: uint8ArrayToHexString(sphincsPlusKey.publicKey),
+      packet: encryptedChild,
+    };
+    this.dbSetChild(currentAccount);
+    // init current account
+    this.signer = currentAccount;
 
     // Zero out the sensitive data
     password.fill(0);

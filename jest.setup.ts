@@ -1,14 +1,5 @@
-global.crypto = {
-  // should not affect getRandomValues in production build
-  getRandomValues: (arr: Uint8Array) => {
-    if (!(arr instanceof Uint8Array)) {
-      throw new TypeError("Expected Uint8Array");
-    }
-    const randomBytes = require("crypto").randomBytes(arr.length);
-    arr.set(randomBytes);
-    return arr;
-  },
-} as Crypto;
+import { TextEncoder, TextDecoder } from 'util';
+Object.assign(global, { TextDecoder, TextEncoder });
 
 jest.mock("./src/core/config.ts", () => {
   const originalModule = jest.requireActual("./src/core/config.ts");
