@@ -13,7 +13,7 @@ import {
 import { Set } from "immutable";
 import { BI } from "@ckb-lumos/bi";
 import { bytes } from "@ckb-lumos/codec";
-import { SPHINCSPLUS_LOCK } from "./config_wallet";
+import { SPHINCSPLUS_LOCK } from "./config";
 import { RPC } from "@ckb-lumos/rpc";
 
 /**

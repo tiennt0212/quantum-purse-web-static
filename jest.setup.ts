@@ -10,8 +10,8 @@ global.crypto = {
   },
 } as Crypto;
 
-jest.mock("./src/core/config_wallet.ts", () => {
-  const originalModule = jest.requireActual("./src/core/config_wallet.ts");
+jest.mock("./src/core/config.ts", () => {
+  const originalModule = jest.requireActual("./src/core/config.ts");
   return {
     ...originalModule,
     CKB_INDEXER_URL: "http://localhost:8114/indexer",

@@ -33,7 +33,7 @@ import {
   FEE_RATE,
   IS_MAIN_NET,
   SPHINCSPLUS_LOCK,
-} from "./config_wallet";
+} from "./config";
 import { hexToInt, intToHex, prepareSphincsPlusSigningEntries } from "./utils";
 import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 

@@ -1,6 +1,6 @@
 import { execSync } from "child_process";
 import { transfer } from "../core/transaction_builder";
-import QuantumPurse from "../core/fips205_signer";
+import QuantumPurse from "../core/quantum_purse";
 import { sendTransaction } from "../core/utils";
 
 const CKB_INDEXER_URL = "http://localhost:8114/indexer";
