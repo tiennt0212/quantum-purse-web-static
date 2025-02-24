@@ -24,8 +24,8 @@ describe("Integration Test for Quantum Purse", () => {
   beforeAll(async () => {
     wallet = QuantumPurse.getInstance();
     const encryptedSeed = await wallet.encrypt(password, seedByte);
-    wallet.dbSetMaster(encryptedSeed);
-    wallet.createAccount(password);
+    wallet.dbSetMasterKey(encryptedSeed);
+    wallet.deriveChildKey(password);
     QPAddress = wallet.getAddress();
     console.log(">>>QPAddress: ", QPAddress);
 
