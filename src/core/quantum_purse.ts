@@ -40,16 +40,14 @@ interface PublicSphincs {
  * Implements a singleton pattern to ensure a single instance during runtime.
  */
 class QuantumPurse {
-  static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ shake 128f simple signature length
-  static readonly MESSAGE_LEN: number = 32; // Message digest length (256-bit)
-  static readonly ENTROPY_LEN: number = 48; // Entropy length for sphincs+ key gen
+  static readonly SPX_SIG_LEN: number = 17088;
   static readonly DB_MASTER_KEY = "masterKey";
   static readonly DB_CHILD_KEYS = "childKeys";
 
   private SALT_LENGTH = 16; // 128-bit salt
   private IV_LENGTH = 12; // 96-bit IV for AES-GCM
-  private SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 };
-  private SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 };
+  private SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
+  private SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
 
   private signer?: PublicSphincs; // Current signer data
   private static instance: QuantumPurse | null = null; // Singleton instance
