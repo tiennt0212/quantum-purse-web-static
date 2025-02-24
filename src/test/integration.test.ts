@@ -1,7 +1,8 @@
 import { execSync } from "child_process";
 import { transfer } from "../core/transaction_builder";
-import QuantumPurse from "../core/fips205_signer";
+import QuantumPurse from "../core/quantum_purse";
 import { sendTransaction } from "../core/utils";
+import { utf8ToBytes } from "@noble/hashes/utils";
 
 const CKB_INDEXER_URL = "http://localhost:8114/indexer";
 const NODE_URL = "http://localhost:8114";
@@ -16,10 +17,17 @@ const testAccount = {
 describe("Integration Test for Quantum Purse", () => {
   let wallet: QuantumPurse;
   let QPAddress: string;
+  const password = utf8ToBytes("my passwork is weak, don't try this");
+  const seed = QuantumPurse.generateSeedPhrase();
+  const seedByte = utf8ToBytes(seed);
 
-  beforeAll(() => {
+  beforeAll(async () => {
     wallet = QuantumPurse.getInstance();
+    const encryptedSeed = await wallet.encrypt(password, seedByte);
+    wallet.dbSetMasterKey(encryptedSeed);
+    wallet.deriveChildKey(password);
     QPAddress = wallet.getAddress();
+    console.log(">>>QPAddress: ", QPAddress);
 
     console.log("[INFO] Building QR lock script...");
     execSync("make build", { cwd: "rust-quantum-resistant-lock-script", stdio: "inherit" });
@@ -42,7 +50,7 @@ describe("Integration Test for Quantum Purse", () => {
 
   test("Pass - Unlocking a sphincs+ protected cell", async () => {
     let tx = await transfer(QPAddress, testAccount.account, "200");
-    const signedTx = wallet.sign(tx);
+    const signedTx = await wallet.sign(tx, password);
     await sendTransaction(NODE_URL, signedTx);
   });
 

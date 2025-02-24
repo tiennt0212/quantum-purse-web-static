@@ -13,7 +13,7 @@ import {
 import { Set } from "immutable";
 import { BI } from "@ckb-lumos/bi";
 import { bytes } from "@ckb-lumos/codec";
-import { SPHINCSPLUS_LOCK } from "./config_wallet";
+import { SPHINCSPLUS_LOCK } from "./config";
 import { RPC } from "@ckb-lumos/rpc";
 
 /**
@@ -347,7 +347,7 @@ export function hexStringToUint8Array(hex: string): Uint8Array {
  * @returns A hex string.
  */
 export function uint8ArrayToHexString(arr: Uint8Array): string {
-  return Array.from(arr)
+  return "0x" + Array.from(arr)
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('');
 }
