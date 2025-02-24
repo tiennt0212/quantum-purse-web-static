@@ -234,7 +234,10 @@ class QuantumPurse {
     }
   }
 
-  /** Clears a specific key from localStorage. */
+  /**
+   * Clears a specific key from localStorage.
+   * TODO Check security on localStorage + provide a password strength checking function.
+   */
   public dbClear(dbKey: "masterKey" | "childKeys"): void {
     localStorage.removeItem(dbKey);
   }
@@ -248,9 +251,9 @@ class QuantumPurse {
   }
 
   /** Retrieves encrypted master key (seed) from localStorage. */
-  public dbGetMasterKey(): EncryptionPacket | undefined {
+  public dbGetMasterKey(): EncryptionPacket | null {
     const localData = localStorage.getItem(QuantumPurse.DB_MASTER_KEY);
-    return localData ? JSON.parse(localData) : undefined;
+    return localData ? JSON.parse(localData) : null;
   }
 
   /** Stores encrypted child key data in localStorage. */
@@ -260,7 +263,7 @@ class QuantumPurse {
     const packets: PublicSphincs[] = localData ? JSON.parse(localData) : [];
 
     if (packets.some((p) => p.sphincsPlusPubKey === input.sphincsPlusPubKey)) {
-      return; // Key already exists
+      return;
     }
 
     packets.push(input);
@@ -307,10 +310,10 @@ class QuantumPurse {
     const path = `pq/ckb/${localData.length}`;
 
     const packet = this.dbGetMasterKey();
-    if (!packet) throw new Error("Master key (seed) not found");
+    if (!packet) throw new Error("Master key (seed) not found!");
 
     const seed = await this.decrypt(password, packet);
-    if (!seed) throw new Error("Seed decryption failed");
+    if (!seed) throw new Error("Seed decryption failed. Please check your password!");
 
     const sphincsSeed = await scryptAsync(
       seed,
