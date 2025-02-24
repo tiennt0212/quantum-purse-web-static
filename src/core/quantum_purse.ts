@@ -313,7 +313,8 @@ class QuantumPurse {
     if (!packet) throw new Error("Master key (seed) not found!");
 
     const seed = await this.decrypt(password, packet);
-    if (!seed) throw new Error("Seed decryption failed. Please check your password!");
+    if (!seed)
+      throw new Error("Seed decryption failed. Please check your password!");
 
     const sphincsSeed = await scryptAsync(
       seed,
@@ -335,6 +336,66 @@ class QuantumPurse {
     password.fill(0); // Clear sensitive data
     seed.fill(0);
     sphincsSeed.fill(0);
+  }
+
+  /**
+   * Calculates the entropy of a password in bits, aligned with antivirus.promo behavior.
+   * Processes the raw Uint8Array directly and overwrites it with fill(0) after use.
+   * @param password - The password as a Uint8Array (UTF-8 encoded), will be zeroed out after processing.
+   * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
+   */
+  public static calculatePasswordEntropy(password: Uint8Array): number {
+    // Validate input
+    if (!password || password.length === 0) {
+      return 0;
+    }
+
+    const length = password.length; // Use byte length
+
+    // Estimate pool size based on ASCII character categories
+    let hasLower = false,
+      hasUpper = false,
+      hasDigit = false,
+      hasSymbol = false,
+      hasNonAscii = false;
+    for (let i = 0; i < length; i++) {
+      const byte = password[i];
+      if (byte >= 97 && byte <= 122) hasLower = true; // a-z
+      else if (byte >= 65 && byte <= 90) hasUpper = true; // A-Z
+      else if (byte >= 48 && byte <= 57) hasDigit = true; // 0-9
+      else if (
+        (byte >= 33 && byte <= 47) ||
+        (byte >= 58 && byte <= 64) ||
+        (byte >= 91 && byte <= 96) ||
+        (byte >= 123 && byte <= 126)
+      )
+        hasSymbol = true; // !-/ : @-` {~}
+      else if (byte > 127) hasNonAscii = true; // UTF-8 multi-byte
+    }
+
+    // Determine pool size based on detected categories
+    let poolSize = 0;
+    if (hasLower) poolSize += 26; // Lowercase
+    if (hasUpper) poolSize += 26; // Uppercase
+    if (hasDigit) poolSize += 10; // Digits
+    if (hasSymbol) poolSize += 32; // Symbols
+
+    // Handle edge cases and non-ASCII
+    if (poolSize === 0) {
+      poolSize = 1; // Minimum pool for all-same or uncategorized bytes (e.g., "aaa")
+    }
+    if (hasNonAscii) {
+      poolSize = Math.max(poolSize, 94); // Minimum for full printable ASCII
+      poolSize = Math.min(poolSize, 256); // Cap at byte max for UTF-8
+    }
+
+    // Entropy = length * log2(poolSize), rounded down
+    const entropy = Math.floor(length * Math.log2(poolSize));
+
+    // Overwrite the input password
+    password.fill(0);
+
+    return entropy;
   }
 
   /**
