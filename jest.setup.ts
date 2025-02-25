@@ -11,8 +11,7 @@ jest.mock("./src/core/config.ts", () => {
       ...originalModule.SPHINCSPLUS_LOCK,
       outPoint: {
         ...originalModule.SPHINCSPLUS_LOCK.outPoint,
-        txHash:
-          "0xe51c3616ce1244ed32a8b3d65343d11c838afde1b711810edcf6e5236de57c87",
+        txHash: "0xdefault_placeholder_hash", // Temporary value, to be updated in test run
       },
     },
   };

@@ -3,6 +3,7 @@ import { transfer } from "../core/transaction_builder";
 import QuantumPurse from "../core/quantum_purse";
 import { sendTransaction } from "../core/utils";
 import { utf8ToBytes } from "@noble/hashes/utils";
+import * as config from "../core/config";
 
 const CKB_INDEXER_URL = "http://localhost:8114/indexer";
 const NODE_URL = "http://localhost:8114";
@@ -46,6 +47,8 @@ describe("Integration Test for Quantum Purse", () => {
       encoding: "utf-8",
       stdio: ["inherit", "pipe", "pipe"],
     }).trim();
+    // Remove ANSI escape codes and update the mocked config with the deployed transaction hash
+    config.SPHINCSPLUS_LOCK.outPoint.txHash = deployedTxHash.replace(/\x1B\[\d+m/g, '');
   });
 
   test("Pass - Unlocking a sphincs+ protected cell", async () => {
