@@ -30,9 +30,9 @@ interface EncryptionPacket {
   cipherText: string;
 }
 
-interface PublicSphincs {
+interface SphincsPlusSigner {
   sphincsPlusPubKey: string;
-  packet: EncryptionPacket;
+  sphincsPlusPriEnc: EncryptionPacket;
 }
 
 /**
@@ -49,7 +49,7 @@ class QuantumPurse {
   private SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
   private SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
 
-  private signer?: PublicSphincs; // Current signer data
+  private currentSigner?: SphincsPlusSigner;
   private static instance: QuantumPurse | null = null; // Singleton instance
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
 
@@ -93,11 +93,11 @@ class QuantumPurse {
 
   /** Generates the lock script for the current signer. */
   private getLockScript(): Script {
-    if (!this.signer) throw new Error("Signer not available!");
+    if (!this.currentSigner) throw new Error("Signer not available!");
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
-      args: ckbHash(this.signer.sphincsPlusPubKey),
+      args: ckbHash(this.currentSigner.sphincsPlusPubKey),
     };
   }
 
@@ -145,15 +145,15 @@ class QuantumPurse {
     tx: TransactionSkeletonType,
     password: Uint8Array
   ): Promise<Transaction> {
-    if (!this.signer) throw new Error("Signer not available!");
+    if (!this.currentSigner) throw new Error("Signer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN + this.signer.sphincsPlusPubKey.length;
+      QuantumPurse.SPX_SIG_LEN + this.currentSigner.sphincsPlusPubKey.length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
     const signingEntries = tx.get("signingEntries").toArray();
-    const privateKey = await this.decrypt(password, this.signer.packet);
+    const privateKey = await this.decrypt(password, this.currentSigner.sphincsPlusPriEnc);
     if (!privateKey) throw new Error("Failed to decrypt private key");
 
     const signature = slh_dsa_shake_128f.sign(
@@ -165,7 +165,7 @@ class QuantumPurse {
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
     const serializedPublicKey = new Reader(
-      hexStringToUint8Array(this.signer.sphincsPlusPubKey).buffer
+      hexStringToUint8Array(this.currentSigner.sphincsPlusPubKey).buffer
     ).serializeJson();
 
     const witness =
@@ -297,7 +297,7 @@ class QuantumPurse {
   }
 
   /** Stores encrypted child key data in IndexedDB. */
-  public async dbSetChildKey(input: PublicSphincs): Promise<void> {
+  public async dbSetChildKey(input: SphincsPlusSigner): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
@@ -316,11 +316,11 @@ class QuantumPurse {
   }
 
   /**
-   * Retrieves a PublicSphincs object from IndexedDB using a SPHINCS+ public key.
+   * Retrieves a SphincsPlusSigner object from IndexedDB using a SPHINCS+ public key.
    * @param key - The SPHINCS+ public key to look up in DB.
-   * @returns The matching PublicSphincs object, or null.
+   * @returns The matching SphincsPlusSigner object, or null.
    */
-  public async dbGetChildKey(key: string): Promise<PublicSphincs | null> {
+  public async dbGetChildKey(key: string): Promise<SphincsPlusSigner | null> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
@@ -332,7 +332,7 @@ class QuantumPurse {
   }
 
   /** Retrieves all child key data from IndexedDB. */
-  public async dbGetChildKeys(): Promise<PublicSphincs[]> {
+  public async dbGetChildKeys(): Promise<SphincsPlusSigner[]> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
@@ -367,13 +367,13 @@ class QuantumPurse {
     sphincsPlusKey.secretKey.fill(0); // Clear sensitive data
 
     const encryptedChild = await this.encrypt(password, sphincsSeed);
-    const currentAccount: PublicSphincs = {
+    const currentAccount: SphincsPlusSigner = {
       sphincsPlusPubKey: uint8ArrayToHexString(sphincsPlusKey.publicKey),
-      packet: encryptedChild,
+      sphincsPlusPriEnc: encryptedChild,
     };
 
     await this.dbSetChildKey(currentAccount);
-    this.signer = currentAccount;
+    this.currentSigner = currentAccount;
 
     password.fill(0); // Clear sensitive data
     seed.fill(0);
