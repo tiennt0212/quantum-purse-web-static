@@ -40,9 +40,9 @@ interface PublicSphincs {
  * Implements a singleton pattern to ensure a single instance during runtime.
  */
 class QuantumPurse {
-  static readonly SPX_SIG_LEN: number = 17088;
-  static readonly DB_MASTER_KEY = "masterKey";
-  static readonly DB_CHILD_KEYS = "childKeys";
+  static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ signature length
+  static readonly STORE_MASTER_KEY = "masterKey";
+  static readonly STORE_CHILD_KEYS = "childKeys";
 
   private SALT_LENGTH = 16; // 128-bit salt
   private IV_LENGTH = 12; // 96-bit IV for AES-GCM
@@ -52,6 +52,8 @@ class QuantumPurse {
   private signer?: PublicSphincs; // Current signer data
   private static instance: QuantumPurse | null = null; // Singleton instance
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
+
+  private dbPromise: Promise<IDBDatabase> | null = null;
 
   private constructor(sphincsCodeHash: string, sphincsHashType: HashType) {
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
@@ -66,6 +68,27 @@ class QuantumPurse {
       );
     }
     return QuantumPurse.instance;
+  }
+
+  private async getDB(): Promise<IDBDatabase> {
+    if (this.dbPromise) {
+      return this.dbPromise;
+    }
+    this.dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open("QuantumPurseDB", 1);
+      request.onupgradeneeded = (event) => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(QuantumPurse.STORE_MASTER_KEY)) {
+          db.createObjectStore(QuantumPurse.STORE_MASTER_KEY);
+        }
+        if (!db.objectStoreNames.contains(QuantumPurse.STORE_CHILD_KEYS)) {
+          db.createObjectStore(QuantumPurse.STORE_CHILD_KEYS, { keyPath: "sphincsPlusPubKey" });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return this.dbPromise;
   }
 
   /** Generates the lock script for the current signer. */
@@ -233,70 +256,91 @@ class QuantumPurse {
   }
 
   /**
-   * Clears a specific key from localStorage.
-   * TODO Check security on localStorage + provide a password strength checking function.
+   * Clears a specific object store in IndexedDB.
    */
-  public dbClear(dbKey: "masterKey" | "childKeys"): void {
-    localStorage.removeItem(dbKey);
+  public async dbClear(dbKey: typeof QuantumPurse.STORE_MASTER_KEY | typeof QuantumPurse.STORE_CHILD_KEYS): Promise<void> {
+    const db = await this.getDB();
+    const tx = db.transaction(dbKey, "readwrite");
+    const store = tx.objectStore(dbKey);
+    const request = store.clear();
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
   /**
-   * Stores encrypted master key (seed) in localStorage.
-   * @warning Overwrites existing data in localStorage.
+   * Stores encrypted master key (seed) in IndexedDB.
+   * @warning Overwrites existing data in IndexedDB.
    */
-  public dbSetMasterKey(input: EncryptionPacket): void {
-    localStorage.setItem(QuantumPurse.DB_MASTER_KEY, JSON.stringify(input));
+  public async dbSetMasterKey(input: EncryptionPacket): Promise<void> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readwrite");
+    const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
+    const request = store.put(input, "masterKeyEntry");
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  /** Retrieves encrypted master key (seed) from localStorage. */
-  public dbGetMasterKey(): EncryptionPacket | null {
-    const localData = localStorage.getItem(QuantumPurse.DB_MASTER_KEY);
-    return localData ? JSON.parse(localData) : null;
+  /** Retrieves encrypted master key (seed) from IndexedDB. */
+  public async dbGetMasterKey(): Promise<EncryptionPacket | null> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readonly");
+    const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
+    const request = store.get("masterKeyEntry");
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  /** Stores encrypted child key data in localStorage. */
-  public dbSetChildKey(input: PublicSphincs): void {
-    const dbKey = QuantumPurse.DB_CHILD_KEYS;
-    const localData = localStorage.getItem(dbKey);
-    const packets: PublicSphincs[] = localData ? JSON.parse(localData) : [];
-
-    if (packets.some((p) => p.sphincsPlusPubKey === input.sphincsPlusPubKey)) {
-      return;
+  /** Stores encrypted child key data in IndexedDB. */
+  public async dbSetChildKey(input: PublicSphincs): Promise<void> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
+    const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
+    const existing = await new Promise((resolve, reject) => {
+      const request = store.get(input.sphincsPlusPubKey);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    if (!existing) {
+      const request = store.put(input);
+      await new Promise<void>((resolve, reject) => {
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
     }
-
-    packets.push(input);
-    localStorage.setItem(dbKey, JSON.stringify(packets));
   }
 
   /**
-   * Retrieves a PublicSphincs object from local storage using a SPHINCS+ public key.
+   * Retrieves a PublicSphincs object from IndexedDB using a SPHINCS+ public key.
    * @param key - The SPHINCS+ public key to look up in DB.
    * @returns The matching PublicSphincs object, or null.
    */
-  public dbGetChildKey(key: string): PublicSphincs | null {
-    const dbKey = QuantumPurse.DB_CHILD_KEYS;
-    const localData = localStorage.getItem(dbKey);
-    if (!localData) return null;
-    try {
-      const packets: PublicSphincs[] = JSON.parse(localData);
-      return packets.find((p) => p.sphincsPlusPubKey === key) ?? null;
-    } catch (error) {
-      console.error(`Failed to retrieve data for "${dbKey}":`, error);
-      return null;
-    }
+  public async dbGetChildKey(key: string): Promise<PublicSphincs | null> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
+    const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
+    const request = store.get(key);
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  /** Retrieves all child key data from localStorage. */
-  public dbGetChildKeys(): PublicSphincs[] {
-    const dbKey = QuantumPurse.DB_CHILD_KEYS;
-    const localData = localStorage.getItem(dbKey);
-    if (!localData) return [];
-    try {
-      return JSON.parse(localData);
-    } catch (error) {
-      console.error(`Failed to retrieve data for ${dbKey}:`, error);
-      return [];
-    }
+  /** Retrieves all child key data from IndexedDB. */
+  public async dbGetChildKeys(): Promise<PublicSphincs[]> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
+    const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
+    const request = store.getAll();
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
   }
 
   /**
@@ -304,10 +348,10 @@ class QuantumPurse {
    * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
    */
   public async deriveChildKey(password: Uint8Array): Promise<void> {
-    const localData = this.dbGetChildKeys();
-    const path = `pq/ckb/${localData.length}`;
+    const childKeys = await this.dbGetChildKeys();
+    const path = `pq/ckb/${childKeys.length}`;
 
-    const packet = this.dbGetMasterKey();
+    const packet = await this.dbGetMasterKey();
     if (!packet) throw new Error("Master key (seed) not found!");
 
     const seed = await this.decrypt(password, packet);
@@ -328,7 +372,7 @@ class QuantumPurse {
       packet: encryptedChild,
     };
 
-    this.dbSetChildKey(currentAccount);
+    await this.dbSetChildKey(currentAccount);
     this.signer = currentAccount;
 
     password.fill(0); // Clear sensitive data
