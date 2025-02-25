@@ -2,7 +2,7 @@ import { TextEncoder, TextDecoder } from 'util';
 Object.assign(global, { TextDecoder, TextEncoder });
 
 jest.mock("./src/core/config.ts", () => {
-  const originalModule = jest.requireActual("./src/core/config.ts");
+  const originalModule = jest.requireActual("./src/core/config");
   return {
     ...originalModule,
     CKB_INDEXER_URL: "http://localhost:8114/indexer",
