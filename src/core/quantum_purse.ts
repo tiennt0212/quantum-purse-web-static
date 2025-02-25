@@ -46,8 +46,8 @@ class QuantumPurse {
 
   private SALT_LENGTH = 16; // 128-bit salt
   private IV_LENGTH = 12; // 96-bit IV for AES-GCM
-  private SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
-  private SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
+  private SCRYPT_PARAMS_FOR_AES_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
+  private SCRYPT_PARAMS_FOR_SPX_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
 
   private currentSigner?: SphincsPlusSigner;
   private static instance: QuantumPurse | null = null; // Singleton instance
@@ -193,7 +193,7 @@ class QuantumPurse {
     globalThis.crypto.getRandomValues(salt);
     globalThis.crypto.getRandomValues(iv);
 
-    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_SEED);
+    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_AES_KEY);
     password.fill(0); // Clear sensitive data
 
     const cryptoKey = await globalThis.crypto.subtle.importKey(
@@ -232,7 +232,7 @@ class QuantumPurse {
     const iv = hexStringToUint8Array(packet.iv);
     const cipherText = hexStringToUint8Array(packet.cipherText);
 
-    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_SEED);
+    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_AES_KEY);
     const cryptoKey = await globalThis.crypto.subtle.importKey(
       "raw",
       key,
@@ -348,6 +348,10 @@ class QuantumPurse {
    * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
    */
   public async deriveChildKey(password: Uint8Array): Promise<void> {
+    // Because decrypt by default will zero out the password, we need to clone it.
+    // Although this can be redesigned to let user decrypt master seed then derive keys,
+    // it's more secure to do it in side this function automatically then dispose the password
+    const passwordClone = new Uint8Array(password);
     const childKeys = await this.dbGetChildKeys();
     const path = `pq/ckb/${childKeys.length}`;
 
@@ -356,17 +360,16 @@ class QuantumPurse {
 
     const seed = await this.decrypt(password, packet);
     if (!seed)
-      throw new Error("Seed decryption failed. Please check your password!");
+      throw new Error("Seed decryption failed!");
 
     const sphincsSeed = await scryptAsync(
       seed,
       path,
-      this.SCRYPT_PARAMS_FOR_KDF
+      this.SCRYPT_PARAMS_FOR_SPX_KEY
     );
     const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
-    sphincsPlusKey.secretKey.fill(0); // Clear sensitive data
 
-    const encryptedChild = await this.encrypt(password, sphincsSeed);
+    const encryptedChild = await this.encrypt(passwordClone, sphincsPlusKey.secretKey);
     const currentAccount: SphincsPlusSigner = {
       sphincsPlusPubKey: uint8ArrayToHexString(sphincsPlusKey.publicKey),
       sphincsPlusPriEnc: encryptedChild,
@@ -375,9 +378,12 @@ class QuantumPurse {
     await this.dbSetChildKey(currentAccount);
     this.currentSigner = currentAccount;
 
-    password.fill(0); // Clear sensitive data
+    // Clear sensitive data
+    password.fill(0);
+    passwordClone.fill(0);
     seed.fill(0);
     sphincsSeed.fill(0);
+    sphincsPlusKey.secretKey.fill(0);
   }
 
   /**
