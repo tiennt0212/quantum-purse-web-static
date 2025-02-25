@@ -138,7 +138,7 @@ class QuantumPurse {
   /**
    * Signs a transaction using SPHINCS+.
    * @param tx - Transaction skeleton to sign.
-   * @param password - Password to decrypt the private key.
+   * @param password - Password to decrypt the private key and sign the message.
    * @returns Signed transaction.
    */
   public async sign(
