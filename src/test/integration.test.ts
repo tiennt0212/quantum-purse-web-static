@@ -17,15 +17,15 @@ const testAccount = {
 describe("Integration Test for Quantum Purse", () => {
   let wallet: QuantumPurse;
   let QPAddress: string;
-  const password = utf8ToBytes("my passwork is weak, don't try this");
+  const passwordStr = "my passwork is weak, don't try this";
   const seed = QuantumPurse.generateSeedPhrase();
   const seedByte = utf8ToBytes(seed);
 
   beforeAll(async () => {
     wallet = QuantumPurse.getInstance();
-    const encryptedSeed = await wallet.encrypt(password, seedByte);
-    wallet.dbSetMasterKey(encryptedSeed);
-    wallet.deriveChildKey(password);
+    const encryptedSeed = await wallet.encrypt(utf8ToBytes(passwordStr), seedByte);
+    await wallet.dbSetMasterKey(encryptedSeed);
+    await wallet.deriveChildKey(utf8ToBytes(passwordStr));
     QPAddress = wallet.getAddress();
     console.log(">>>QPAddress: ", QPAddress);
 
@@ -50,7 +50,7 @@ describe("Integration Test for Quantum Purse", () => {
 
   test("Pass - Unlocking a sphincs+ protected cell", async () => {
     let tx = await transfer(QPAddress, testAccount.account, "200");
-    const signedTx = await wallet.sign(tx, password);
+    const signedTx = await wallet.sign(tx, utf8ToBytes(passwordStr));
     await sendTransaction(NODE_URL, signedTx);
   });
 
