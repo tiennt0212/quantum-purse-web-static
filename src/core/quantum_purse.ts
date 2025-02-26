@@ -138,7 +138,7 @@ class QuantumPurse {
   /**
    * Signs a transaction using SPHINCS+.
    * @param tx - Transaction skeleton to sign.
-   * @param password - Password to decrypt the private key and sign the message.
+   * @param password - Password to decrypt the private key to sign the message.
    * @returns Signed transaction.
    */
   public async sign(
@@ -148,7 +148,7 @@ class QuantumPurse {
     if (!this.currentSigner) throw new Error("Signer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN + this.currentSigner.sphincsPlusPubKey.length;
+      QuantumPurse.SPX_SIG_LEN + hexStringToUint8Array(this.currentSigner.sphincsPlusPubKey).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
@@ -164,12 +164,9 @@ class QuantumPurse {
     privateKey.fill(0); // Clear sensitive data
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
-    const serializedPublicKey = new Reader(
-      hexStringToUint8Array(this.currentSigner.sphincsPlusPubKey).buffer
-    ).serializeJson();
 
     const witness =
-      serializedSignature + serializedPublicKey.replace(/^0x/, "");
+      serializedSignature + this.currentSigner.sphincsPlusPubKey.replace(/^0x/, "");
     return sealTransaction(tx, [witness]);
   }
 
