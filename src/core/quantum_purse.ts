@@ -30,9 +30,9 @@ interface EncryptionPacket {
   cipherText: string;
 }
 
-interface PublicSphincs {
+interface SphincsPlusSigner {
   sphincsPlusPubKey: string;
-  packet: EncryptionPacket;
+  sphincsPlusPriEnc: EncryptionPacket;
 }
 
 /**
@@ -40,20 +40,20 @@ interface PublicSphincs {
  * Implements a singleton pattern to ensure a single instance during runtime.
  */
 class QuantumPurse {
-  static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ shake 128f simple signature length
-  static readonly MESSAGE_LEN: number = 32; // Message digest length (256-bit)
-  static readonly ENTROPY_LEN: number = 48; // Entropy length for sphincs+ key gen
-  static readonly DB_MASTER_KEY = "masterKey";
-  static readonly DB_CHILD_KEYS = "childKeys";
+  static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ signature length
+  static readonly STORE_MASTER_KEY = "masterKey";
+  static readonly STORE_CHILD_KEYS = "childKeys";
 
   private SALT_LENGTH = 16; // 128-bit salt
   private IV_LENGTH = 12; // 96-bit IV for AES-GCM
-  private SCRYPT_PARAMS_FOR_SEED = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 };
-  private SCRYPT_PARAMS_FOR_KDF = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 };
+  private SCRYPT_PARAMS_FOR_AES_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
+  private SCRYPT_PARAMS_FOR_SPX_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
 
-  private signer?: PublicSphincs; // Current signer data
+  private currentSigner?: SphincsPlusSigner;
   private static instance: QuantumPurse | null = null; // Singleton instance
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
+
+  private dbPromise: Promise<IDBDatabase> | null = null;
 
   private constructor(sphincsCodeHash: string, sphincsHashType: HashType) {
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
@@ -70,13 +70,34 @@ class QuantumPurse {
     return QuantumPurse.instance;
   }
 
+  private async getDB(): Promise<IDBDatabase> {
+    if (this.dbPromise) {
+      return this.dbPromise;
+    }
+    this.dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open("QuantumPurseDB", 1);
+      request.onupgradeneeded = (event) => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(QuantumPurse.STORE_MASTER_KEY)) {
+          db.createObjectStore(QuantumPurse.STORE_MASTER_KEY);
+        }
+        if (!db.objectStoreNames.contains(QuantumPurse.STORE_CHILD_KEYS)) {
+          db.createObjectStore(QuantumPurse.STORE_CHILD_KEYS, { keyPath: "sphincsPlusPubKey" });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return this.dbPromise;
+  }
+
   /** Generates the lock script for the current signer. */
   private getLockScript(): Script {
-    if (!this.signer) throw new Error("Signer not available!");
+    if (!this.currentSigner) throw new Error("Signer not available!");
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
-      args: ckbHash(this.signer.sphincsPlusPubKey),
+      args: ckbHash(this.currentSigner.sphincsPlusPubKey),
     };
   }
 
@@ -117,22 +138,22 @@ class QuantumPurse {
   /**
    * Signs a transaction using SPHINCS+.
    * @param tx - Transaction skeleton to sign.
-   * @param password - Password to decrypt the private key.
+   * @param password - Password to decrypt the private key to sign the message.
    * @returns Signed transaction.
    */
   public async sign(
     tx: TransactionSkeletonType,
     password: Uint8Array
   ): Promise<Transaction> {
-    if (!this.signer) throw new Error("Signer not available!");
+    if (!this.currentSigner) throw new Error("Signer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN + this.signer.sphincsPlusPubKey.length;
+      QuantumPurse.SPX_SIG_LEN + hexStringToUint8Array(this.currentSigner.sphincsPlusPubKey).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
     const signingEntries = tx.get("signingEntries").toArray();
-    const privateKey = await this.decrypt(password, this.signer.packet);
+    const privateKey = await this.decrypt(password, this.currentSigner.sphincsPlusPriEnc);
     if (!privateKey) throw new Error("Failed to decrypt private key");
 
     const signature = slh_dsa_shake_128f.sign(
@@ -143,12 +164,9 @@ class QuantumPurse {
     privateKey.fill(0); // Clear sensitive data
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
-    const serializedPublicKey = new Reader(
-      hexStringToUint8Array(this.signer.sphincsPlusPubKey).buffer
-    ).serializeJson();
 
     const witness =
-      serializedSignature + serializedPublicKey.replace(/^0x/, "");
+      serializedSignature + this.currentSigner.sphincsPlusPubKey.replace(/^0x/, "");
     return sealTransaction(tx, [witness]);
   }
 
@@ -172,7 +190,7 @@ class QuantumPurse {
     globalThis.crypto.getRandomValues(salt);
     globalThis.crypto.getRandomValues(iv);
 
-    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_SEED);
+    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_AES_KEY);
     password.fill(0); // Clear sensitive data
 
     const cryptoKey = await globalThis.crypto.subtle.importKey(
@@ -211,7 +229,7 @@ class QuantumPurse {
     const iv = hexStringToUint8Array(packet.iv);
     const cipherText = hexStringToUint8Array(packet.cipherText);
 
-    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_SEED);
+    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_AES_KEY);
     const cryptoKey = await globalThis.crypto.subtle.importKey(
       "raw",
       key,
@@ -235,70 +253,91 @@ class QuantumPurse {
   }
 
   /**
-   * Clears a specific key from localStorage.
-   * TODO Check security on localStorage + provide a password strength checking function.
+   * Clears a specific object store in IndexedDB.
    */
-  public dbClear(dbKey: "masterKey" | "childKeys"): void {
-    localStorage.removeItem(dbKey);
+  public async dbClear(dbKey: typeof QuantumPurse.STORE_MASTER_KEY | typeof QuantumPurse.STORE_CHILD_KEYS): Promise<void> {
+    const db = await this.getDB();
+    const tx = db.transaction(dbKey, "readwrite");
+    const store = tx.objectStore(dbKey);
+    const request = store.clear();
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
   /**
-   * Stores encrypted master key (seed) in localStorage.
-   * @warning Overwrites existing data in localStorage.
+   * Stores encrypted master key (seed) in IndexedDB.
+   * @warning Overwrites existing data in IndexedDB.
    */
-  public dbSetMasterKey(input: EncryptionPacket): void {
-    localStorage.setItem(QuantumPurse.DB_MASTER_KEY, JSON.stringify(input));
+  public async dbSetMasterKey(input: EncryptionPacket): Promise<void> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readwrite");
+    const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
+    const request = store.put(input, "masterKeyEntry");
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  /** Retrieves encrypted master key (seed) from localStorage. */
-  public dbGetMasterKey(): EncryptionPacket | null {
-    const localData = localStorage.getItem(QuantumPurse.DB_MASTER_KEY);
-    return localData ? JSON.parse(localData) : null;
+  /** Retrieves encrypted master key (seed) from IndexedDB. */
+  public async dbGetMasterKey(): Promise<EncryptionPacket | null> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readonly");
+    const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
+    const request = store.get("masterKeyEntry");
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  /** Stores encrypted child key data in localStorage. */
-  public dbSetChildKey(input: PublicSphincs): void {
-    const dbKey = QuantumPurse.DB_CHILD_KEYS;
-    const localData = localStorage.getItem(dbKey);
-    const packets: PublicSphincs[] = localData ? JSON.parse(localData) : [];
-
-    if (packets.some((p) => p.sphincsPlusPubKey === input.sphincsPlusPubKey)) {
-      return;
+  /** Stores encrypted child key data in IndexedDB. */
+  public async dbSetChildKey(input: SphincsPlusSigner): Promise<void> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
+    const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
+    const existing = await new Promise((resolve, reject) => {
+      const request = store.get(input.sphincsPlusPubKey);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    if (!existing) {
+      const request = store.put(input);
+      await new Promise<void>((resolve, reject) => {
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
     }
-
-    packets.push(input);
-    localStorage.setItem(dbKey, JSON.stringify(packets));
   }
 
   /**
-   * Retrieves a PublicSphincs object from local storage using a SPHINCS+ public key.
+   * Retrieves a SphincsPlusSigner object from IndexedDB using a SPHINCS+ public key.
    * @param key - The SPHINCS+ public key to look up in DB.
-   * @returns The matching PublicSphincs object, or null.
+   * @returns The matching SphincsPlusSigner object, or null.
    */
-  public dbGetChildKey(key: string): PublicSphincs | null {
-    const dbKey = QuantumPurse.DB_CHILD_KEYS;
-    const localData = localStorage.getItem(dbKey);
-    if (!localData) return null;
-    try {
-      const packets: PublicSphincs[] = JSON.parse(localData);
-      return packets.find((p) => p.sphincsPlusPubKey === key) ?? null;
-    } catch (error) {
-      console.error(`Failed to retrieve data for "${dbKey}":`, error);
-      return null;
-    }
+  public async dbGetChildKey(key: string): Promise<SphincsPlusSigner | null> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
+    const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
+    const request = store.get(key);
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  /** Retrieves all child key data from localStorage. */
-  public dbGetChildKeys(): PublicSphincs[] {
-    const dbKey = QuantumPurse.DB_CHILD_KEYS;
-    const localData = localStorage.getItem(dbKey);
-    if (!localData) return [];
-    try {
-      return JSON.parse(localData);
-    } catch (error) {
-      console.error(`Failed to retrieve data for ${dbKey}:`, error);
-      return [];
-    }
+  /** Retrieves all child key data from IndexedDB. */
+  public async dbGetChildKeys(): Promise<SphincsPlusSigner[]> {
+    const db = await this.getDB();
+    const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
+    const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
+    const request = store.getAll();
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
   }
 
   /**
@@ -306,35 +345,102 @@ class QuantumPurse {
    * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
    */
   public async deriveChildKey(password: Uint8Array): Promise<void> {
-    const localData = this.dbGetChildKeys();
-    const path = `pq/ckb/${localData.length}`;
+    // Because decrypt by default will zero out the password, we need to clone it.
+    // Although this can be redesigned to let user decrypt master seed then derive keys,
+    // it's more secure to do it in side this function automatically then dispose the password
+    const passwordClone = new Uint8Array(password);
+    const childKeys = await this.dbGetChildKeys();
+    const path = `pq/ckb/${childKeys.length}`;
 
-    const packet = this.dbGetMasterKey();
+    const packet = await this.dbGetMasterKey();
     if (!packet) throw new Error("Master key (seed) not found!");
 
     const seed = await this.decrypt(password, packet);
-    if (!seed) throw new Error("Seed decryption failed. Please check your password!");
+    if (!seed)
+      throw new Error("Seed decryption failed!");
 
     const sphincsSeed = await scryptAsync(
       seed,
       path,
-      this.SCRYPT_PARAMS_FOR_KDF
+      this.SCRYPT_PARAMS_FOR_SPX_KEY
     );
     const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
-    sphincsPlusKey.secretKey.fill(0); // Clear sensitive data
 
-    const encryptedChild = await this.encrypt(password, sphincsSeed);
-    const currentAccount: PublicSphincs = {
+    const encryptedChild = await this.encrypt(passwordClone, sphincsPlusKey.secretKey);
+    const currentAccount: SphincsPlusSigner = {
       sphincsPlusPubKey: uint8ArrayToHexString(sphincsPlusKey.publicKey),
-      packet: encryptedChild,
+      sphincsPlusPriEnc: encryptedChild,
     };
 
-    this.dbSetChildKey(currentAccount);
-    this.signer = currentAccount;
+    await this.dbSetChildKey(currentAccount);
+    this.currentSigner = currentAccount;
 
-    password.fill(0); // Clear sensitive data
+    // Clear sensitive data
+    password.fill(0);
+    passwordClone.fill(0);
     seed.fill(0);
     sphincsSeed.fill(0);
+    sphincsPlusKey.secretKey.fill(0);
+  }
+
+  /**
+   * Calculates the entropy of a password in bits, aligned with antivirus.promo behavior.
+   * Processes the raw Uint8Array directly and overwrites it with fill(0) after use.
+   * @param password - The password as a Uint8Array (UTF-8 encoded), will be zeroed out after processing.
+   * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
+   */
+  public static calculatePasswordEntropy(password: Uint8Array): number {
+    // Validate input
+    if (!password || password.length === 0) {
+      return 0;
+    }
+
+    const length = password.length; // Use byte length
+
+    // Estimate pool size based on ASCII character categories
+    let hasLower = false,
+      hasUpper = false,
+      hasDigit = false,
+      hasSymbol = false,
+      hasNonAscii = false;
+    for (let i = 0; i < length; i++) {
+      const byte = password[i];
+      if (byte >= 97 && byte <= 122) hasLower = true; // a-z
+      else if (byte >= 65 && byte <= 90) hasUpper = true; // A-Z
+      else if (byte >= 48 && byte <= 57) hasDigit = true; // 0-9
+      else if (
+        (byte >= 33 && byte <= 47) ||
+        (byte >= 58 && byte <= 64) ||
+        (byte >= 91 && byte <= 96) ||
+        (byte >= 123 && byte <= 126)
+      )
+        hasSymbol = true; // !-/ : @-` {~}
+      else if (byte > 127) hasNonAscii = true; // UTF-8 multi-byte
+    }
+
+    // Determine pool size based on detected categories
+    let poolSize = 0;
+    if (hasLower) poolSize += 26; // Lowercase
+    if (hasUpper) poolSize += 26; // Uppercase
+    if (hasDigit) poolSize += 10; // Digits
+    if (hasSymbol) poolSize += 32; // Symbols
+
+    // Handle edge cases and non-ASCII
+    if (poolSize === 0) {
+      poolSize = 1; // Minimum pool for all-same or uncategorized bytes (e.g., "aaa")
+    }
+    if (hasNonAscii) {
+      poolSize = Math.max(poolSize, 94); // Minimum for full printable ASCII
+      poolSize = Math.min(poolSize, 256); // Cap at byte max for UTF-8
+    }
+
+    // Entropy = length * log2(poolSize), rounded down
+    const entropy = Math.floor(length * Math.log2(poolSize));
+
+    // Overwrite the input password
+    password.fill(0);
+
+    return entropy;
   }
 
   /**

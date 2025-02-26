@@ -1,5 +1,3 @@
-// export const CKB_INDEXER_URL = "http://localhost:8114/indexer";
-// export const NODE_URL = "http://localhost:8114";
 export const CKB_INDEXER_URL = "https://testnet.ckb.dev/indexer";
 export const NODE_URL = "https://testnet.ckb.dev/";
 export const FEE_RATE = BigInt(1500);
