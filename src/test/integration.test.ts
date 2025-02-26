@@ -5,6 +5,7 @@ import { sendTransaction } from "../core/utils";
 import { utf8ToBytes } from "@noble/hashes/utils";
 import * as config from "../core/config";
 import { utils } from "@ckb-lumos/base";
+import { readFileSync } from "fs";
 const { ckbHash } = utils;
 
 const testAccount = {
@@ -51,6 +52,13 @@ describe("Integration Test for Quantum Purse", () => {
       /\x1B\[\d+m/g,
       ""
     );
+
+    // overwrite the code hash in the mocked jest config
+    const scriptBinary = readFileSync(
+      "./rust-quantum-resistant-lock-script/build/release/qr-lock-script"
+    );
+    const codeHash = ckbHash(scriptBinary);
+    config.SPHINCSPLUS_LOCK.codeHash = codeHash;
 
     // initialize wallet
     wallet = QuantumPurse.getInstance();
