@@ -5,7 +5,9 @@
   "private": true,
   "scripts": {
     "start": "webpack serve --open --config ./webpack/webpack.dev.js",
-    "build": "webpack --config ./webpack/webpack.prod.js",
+    "build:wasm": "cd key-manager && wasm-pack build --target web",
+    "build:webpack": "webpack --config ./webpack/webpack.prod.js",
+    "build": "npm run build:wasm && npm run build:webpack",
     "deploy": "npm run build && node ./src/deploy.js",
     "test": "npx jest"
   },

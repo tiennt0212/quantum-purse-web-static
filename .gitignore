@@ -106,3 +106,8 @@ dist
 .idea
 
 package-lock.json
+
+# Rust key manager build output
+key-manager/pkg/
+key-manager/target/
+key-manager/Cargo.lock
