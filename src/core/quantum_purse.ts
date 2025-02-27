@@ -82,7 +82,9 @@ class QuantumPurse {
           db.createObjectStore(QuantumPurse.STORE_MASTER_KEY);
         }
         if (!db.objectStoreNames.contains(QuantumPurse.STORE_CHILD_KEYS)) {
-          db.createObjectStore(QuantumPurse.STORE_CHILD_KEYS, { keyPath: "sphincsPlusPubKey" });
+          db.createObjectStore(QuantumPurse.STORE_CHILD_KEYS, {
+            keyPath: "sphincsPlusPubKey",
+          });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -140,6 +142,7 @@ class QuantumPurse {
    * @param tx - Transaction skeleton to sign.
    * @param password - Password to decrypt the private key to sign the message.
    * @returns Signed transaction.
+   * @note password, decrypted private key are zerofilled after use.
    */
   public async sign(
     tx: TransactionSkeletonType,
@@ -148,20 +151,23 @@ class QuantumPurse {
     if (!this.signer) throw new Error("Signer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN + hexStringToUint8Array(this.signer.sphincsPlusPubKey).length;
+      QuantumPurse.SPX_SIG_LEN +
+      hexStringToUint8Array(this.signer.sphincsPlusPubKey).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
     const signingEntries = tx.get("signingEntries").toArray();
-    const privateKey = await this.decrypt(password, this.signer.sphincsPlusPriEnc);
+    const privateKey = await this.decrypt(
+      password,
+      this.signer.sphincsPlusPriEnc
+    ); // password is cleared already by decrypt.
     if (!privateKey) throw new Error("Failed to decrypt private key");
 
     const signature = slh_dsa_shake_128f.sign(
       privateKey,
       hexStringToUint8Array(signingEntries[0].message),
       this.genNonce()
-    );
-    privateKey.fill(0); // Clear sensitive data
+    ); privateKey.fill(0); // Clear sensitive data
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
 
@@ -180,6 +186,7 @@ class QuantumPurse {
    * @param password - Password for encryption.
    * @param input - Data to encrypt.
    * @returns Encrypted data packet.
+   * @note password, encryption key are zerofilled after use.
    */
   public async encrypt(
     password: Uint8Array,
@@ -190,8 +197,11 @@ class QuantumPurse {
     globalThis.crypto.getRandomValues(salt);
     globalThis.crypto.getRandomValues(iv);
 
-    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_AES_KEY);
-    password.fill(0); // Clear sensitive data
+    const key = await scryptAsync(
+      password,
+      salt,
+      this.SCRYPT_PARAMS_FOR_AES_KEY
+    ); password.fill(0); // Clear sensitive data
 
     const cryptoKey = await globalThis.crypto.subtle.importKey(
       "raw",
@@ -199,13 +209,13 @@ class QuantumPurse {
       { name: "AES-GCM" },
       false,
       ["encrypt"]
-    );
+    ); key.fill(0); // Clear sensitive data
 
     const encryptedData = await globalThis.crypto.subtle.encrypt(
       { name: "AES-GCM", iv },
       cryptoKey,
       input
-    );
+    ); // TODO dispose cryptoKey
     input.fill(0); // Clear sensitive data
 
     return {
@@ -220,6 +230,8 @@ class QuantumPurse {
    * @param password - Password for decryption.
    * @param packet - Encrypted data packet.
    * @returns Decrypted data or null if decryption fails.
+   * @warning to avoid leakage, handle the output carefully.
+   * @note password is zerofilled after use.
    */
   public async decrypt(
     password: Uint8Array,
@@ -229,22 +241,26 @@ class QuantumPurse {
     const iv = hexStringToUint8Array(packet.iv);
     const cipherText = hexStringToUint8Array(packet.cipherText);
 
-    const key = await scryptAsync(password, salt, this.SCRYPT_PARAMS_FOR_AES_KEY);
+    const key = await scryptAsync(
+      password,
+      salt,
+      this.SCRYPT_PARAMS_FOR_AES_KEY
+    ); password.fill(0); // Clear sensitive data
+
     const cryptoKey = await globalThis.crypto.subtle.importKey(
       "raw",
       key,
       { name: "AES-GCM" },
       false,
       ["decrypt"]
-    );
+    ); key.fill(0); // Clear sensitive data
 
     try {
       const decryptedData = await globalThis.crypto.subtle.decrypt(
         { name: "AES-GCM", iv },
         cryptoKey,
         cipherText
-      );
-      password.fill(0); // Clear sensitive data
+      ); // TODO dispose cryptoKey
       return new Uint8Array(decryptedData);
     } catch (error) {
       console.error("Decryption failed:", error);
@@ -252,10 +268,12 @@ class QuantumPurse {
     }
   }
 
-  /**
-   * Clears a specific object store in IndexedDB.
-   */
-  public async dbClear(dbKey: typeof QuantumPurse.STORE_MASTER_KEY | typeof QuantumPurse.STORE_CHILD_KEYS): Promise<void> {
+  /** Clears a specific object store in IndexedDB. */
+  public async dbClear(
+    dbKey:
+      | typeof QuantumPurse.STORE_MASTER_KEY
+      | typeof QuantumPurse.STORE_CHILD_KEYS
+  ): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(dbKey, "readwrite");
     const store = tx.objectStore(dbKey);
@@ -293,7 +311,9 @@ class QuantumPurse {
     });
   }
 
-  /** Stores an account object of type SphincsPlusSigner in IndexedDB. */
+  /** Stores an account object of type SphincsPlusSigner in IndexedDB. 
+   * Helper for genAccount function
+  */
   private async setAccount(input: SphincsPlusSigner): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
@@ -317,7 +337,9 @@ class QuantumPurse {
    * @param spxPubKey - The SPHINCS+ public key to look up in DB.
    * @returns The matching SphincsPlusSigner object, or null.
    */
-  public async getAccount(spxPubKey: string): Promise<SphincsPlusSigner | null> {
+  public async getAccount(
+    spxPubKey: string
+  ): Promise<SphincsPlusSigner | null> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
@@ -343,6 +365,7 @@ class QuantumPurse {
   /**
    * Generate a new account derived from the master key (seed) and set the new account as signer.
    * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
+   * @note password is zerofilled after use.
    */
   public async genAccount(password: Uint8Array): Promise<void> {
     // Because decrypt by default will zero out the password, we need to clone the password.
@@ -355,18 +378,28 @@ class QuantumPurse {
     const packet = await this.getSeed();
     if (!packet) throw new Error("Master key (seed) not found!");
 
-    const seed = await this.decrypt(password, packet);
-    if (!seed)
-      throw new Error("Seed decryption failed!");
+    const seed = await this.decrypt(password, packet);  // password is cleared already by decrypt.
+    if (!seed) throw new Error("Seed decryption failed!");
 
+    // Using master seed to derive a different 48-byte seed for sphincs+ keygen.
+    // Mostly this is key stretching from 256-bit master seed to 384 bit sphincs seed.
+    // Bit-security isn't changed in this step.
     const sphincsSeed = await scryptAsync(
       seed,
       path,
       this.SCRYPT_PARAMS_FOR_SPX_KEY
-    );
-    const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
+    ); seed.fill(0); // Clear sensitive data
 
-    const encryptedChild = await this.encrypt(passwordClone, sphincsPlusKey.secretKey);
+    const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
+    sphincsSeed.fill(0); // Clear sensitive data
+
+    const encryptedChild = await this.encrypt(
+      passwordClone,
+      sphincsPlusKey.secretKey
+    );
+    passwordClone.fill(0); // Clear sensitive data
+    sphincsPlusKey.secretKey.fill(0); // Clear sensitive data
+
     const currentAccount: SphincsPlusSigner = {
       sphincsPlusPubKey: uint8ArrayToHexString(sphincsPlusKey.publicKey),
       sphincsPlusPriEnc: encryptedChild,
@@ -374,13 +407,6 @@ class QuantumPurse {
 
     await this.setAccount(currentAccount);
     this.signer = currentAccount;
-
-    // Clear sensitive data
-    password.fill(0);
-    passwordClone.fill(0);
-    seed.fill(0);
-    sphincsSeed.fill(0);
-    sphincsPlusKey.secretKey.fill(0);
   }
 
   /** Sets the current signer for SPHINCS+ operations. */
@@ -392,6 +418,7 @@ class QuantumPurse {
    * Processes the raw Uint8Array directly and overwrites it with fill(0) after use.
    * @param password - The password as a Uint8Array (UTF-8 encoded), will be zeroed out after processing.
    * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
+   * @note password is zerofilled after use.
    */
   public static calculateEntropy(password: Uint8Array): number {
     // Validate input
@@ -451,10 +478,15 @@ class QuantumPurse {
    * Imports a wallet using a seed phrase.
    * @param seedPhrase - Seed phrase to import in uint8 array format.
    * @warning Overwrite current seed phrase in DB.
+   * @note password, seed are zerofill after use.
    */
-  public async importSeedPhrase(seedPhrase: Uint8Array, password: Uint8Array): Promise<void> {
+  public async importSeedPhrase(
+    seedPhrase: Uint8Array,
+    password: Uint8Array
+  ): Promise<void> {
     const packet = await this.encrypt(password, seedPhrase);
     await this.setSeed(packet);
+    // Clear sensitive data
     seedPhrase.fill(0);
     password.fill(0);
   }
@@ -464,13 +496,13 @@ class QuantumPurse {
    * @param password - your password to decrypt.
    * @returns The seed phrase as a Uint8Array.
    * @warning To avoid leakage, handle the ouput carefully.
+   * @note password is zerofilled after use.
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
     const packet = await this.getSeed();
     if (!packet) throw new Error("Master key (seed) not found!");
-    const seed = await this.decrypt(password, packet);
+    const seed = await this.decrypt(password, packet); // password is cleared already by decrypt.
     if (!seed) throw new Error("Master key (seed) decryption failed!");
-    password.fill(0);
     return seed;
   }
 }
