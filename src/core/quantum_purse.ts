@@ -311,9 +311,9 @@ class QuantumPurse {
     });
   }
 
-  /** Stores an account object of type SphincsPlusSigner in IndexedDB. 
+  /** Stores an account object of type SphincsPlusSigner in IndexedDB.
    * Helper for genAccount function
-  */
+   */
   private async setAccount(input: SphincsPlusSigner): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
@@ -378,7 +378,7 @@ class QuantumPurse {
     const packet = await this.getSeed();
     if (!packet) throw new Error("Master key (seed) not found!");
 
-    const seed = await this.decrypt(password, packet);  // password is cleared already by decrypt.
+    const seed = await this.decrypt(password, packet); // password is cleared already by decrypt.
     if (!seed) throw new Error("Seed decryption failed!");
 
     // Using master seed to derive a different 48-byte seed for sphincs+ keygen.
