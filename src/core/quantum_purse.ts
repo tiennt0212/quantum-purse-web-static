@@ -345,9 +345,9 @@ class QuantumPurse {
    * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
    */
   public async deriveChildKey(password: Uint8Array): Promise<void> {
-    // Because decrypt by default will zero out the password, we need to clone it.
+    // Because decrypt by default will zero out the password, we need to clone the password.
     // Although this can be redesigned to let user decrypt master seed then derive keys,
-    // it's more secure to do it in side this function automatically then dispose the password
+    // it's more secure to do it in side this function automatically then dispose the password.
     const passwordClone = new Uint8Array(password);
     const childKeys = await this.dbGetChildKeys();
     const path = `pq/ckb/${childKeys.length}`;
@@ -446,16 +446,29 @@ class QuantumPurse {
   /**
    * Imports a wallet using a seed phrase.
    * @param seedPhrase - Seed phrase to import.
-   * @todo Implement this method.
+   * @warning Overwrite current seed phrase in DB.
    */
-  public importSeedPhrase(seedPhrase: string): void {}
+  public async importSeedPhrase(seedPhrase: Uint8Array, password: Uint8Array): Promise<void> {
+    const packet = await this.encrypt(password, seedPhrase);
+    await this.dbSetMasterKey(packet);
+    seedPhrase.fill(0);
+    password.fill(0);
+  }
 
   /**
    * Exports a wallet's seed phrase.
    * @param walletId - Wallet ID to export.
-   * @todo Implement this method.
+   * @returns The seed phrase as a Uint8Array.
+   * @warning To avoid leakage, handle the ouput carefully.
    */
-  public exportSeedPhrase(walletId: string): void {}
+  public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
+    const packet = await this.dbGetMasterKey();
+    if (!packet) throw new Error("Master key (seed) not found!");
+    const seed = await this.decrypt(password, packet);
+    if (!seed) throw new Error("Master key (seed) decryption failed!");
+    password.fill(0);
+    return seed;
+  }
 }
 
 export default QuantumPurse;
