@@ -383,6 +383,10 @@ class QuantumPurse {
     sphincsPlusKey.secretKey.fill(0);
   }
 
+  /** Sets the current signer for SPHINCS+ operations. */
+  public setSigner(signer: SphincsPlusSigner): void {
+    this.currentSigner = signer;
+  }
   /**
    * Calculates the entropy of a password in bits, aligned with antivirus.promo behavior.
    * Processes the raw Uint8Array directly and overwrites it with fill(0) after use.
