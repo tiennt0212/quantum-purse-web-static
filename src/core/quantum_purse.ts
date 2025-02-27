@@ -48,13 +48,13 @@ class QuantumPurse {
   private IV_LENGTH = 12; // 96-bit IV for AES-GCM
   private SCRYPT_PARAMS_FOR_AES_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
   private SCRYPT_PARAMS_FOR_SPX_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
-
+  private DB: Promise<IDBDatabase> | null = null; // indexed db inferface
   private currentSigner?: SphincsPlusSigner;
   private static instance: QuantumPurse | null = null; // Singleton instance
+
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
 
-  private dbPromise: Promise<IDBDatabase> | null = null;
-
+  /** Constructor that takes sphincs+ on-chain binary deployment info */
   private constructor(sphincsCodeHash: string, sphincsHashType: HashType) {
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
   }
@@ -71,10 +71,10 @@ class QuantumPurse {
   }
 
   private async getDB(): Promise<IDBDatabase> {
-    if (this.dbPromise) {
-      return this.dbPromise;
+    if (this.DB) {
+      return this.DB;
     }
-    this.dbPromise = new Promise((resolve, reject) => {
+    this.DB = new Promise((resolve, reject) => {
       const request = indexedDB.open("QuantumPurseDB", 1);
       request.onupgradeneeded = (event) => {
         const db = request.result;
@@ -88,7 +88,7 @@ class QuantumPurse {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    return this.dbPromise;
+    return this.DB;
   }
 
   /** Generates the lock script for the current signer. */
