@@ -262,7 +262,7 @@ export default class QuantumPurse {
    * @returns A promise resolving to the decrypted data as a Uint8Array, or null if decryption fails.
    * @remark The password is overwritten with zeros after use. Handle the output carefully to avoid leakage.
    */
-  public async decrypt(
+  private async decrypt(
     password: Uint8Array,
     packet: EncryptionPacket
   ): Promise<Uint8Array | null> {
@@ -335,7 +335,7 @@ export default class QuantumPurse {
   }
 
   /** Retrieves the single encrypted master key (seed) from IndexedDB. */
-  public async getSeed(): Promise<EncryptionPacket | null> {
+  private async getSeed(): Promise<EncryptionPacket | null> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
@@ -452,7 +452,7 @@ export default class QuantumPurse {
    * Sets the current signer for SPHINCS+ operations.
    * @param signer - The SPHINCS+ signer to set.
    */
-  public setSigner(signer: SphincsPlusSigner): void {
+  private setSigner(signer: SphincsPlusSigner): void {
     this.signer = signer;
   }
 
