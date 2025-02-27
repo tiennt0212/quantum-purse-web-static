@@ -1,3 +1,4 @@
+// QuantumPurse.ts
 import {
   CKB_INDEXER_URL,
   NODE_URL,
@@ -24,22 +25,36 @@ import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
 
 const { ckbHash } = utils;
 
-interface EncryptionPacket {
+/**
+ * Represents an encrypted data packet used for storing sensitive information.
+ */
+export interface EncryptionPacket {
+  /** Hex-encoded salt used for key derivation. */
   salt: string;
+  /** Hex-encoded initialization vector (IV) for AES-GCM encryption. */
   iv: string;
+  /** Hex-encoded encrypted ciphertext. */
   cipherText: string;
 }
 
-interface SphincsPlusSigner {
+/**
+ * Represents a SPHINCS+ signer with public key and encrypted private key.
+ */
+export interface SphincsPlusSigner {
+  /** Hex-encoded SPHINCS+ public key. */
   sphincsPlusPubKey: string;
+  /** Encrypted SPHINCS+ private key packet. */
   sphincsPlusPriEnc: EncryptionPacket;
 }
 
 /**
- * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple).
- * Implements a singleton pattern to ensure a single instance during runtime.
+ * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple)
+ * on the Nervos CKB blockchain. Implements a singleton pattern to ensure a single instance.
+ *
+ * This class provides functionality for generating accounts, signing transactions,
+ * managing seed phrases, and interacting with the blockchain.
  */
-class QuantumPurse {
+export default class QuantumPurse {
   static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ signature length
   static readonly STORE_MASTER_KEY = "masterKey";
   static readonly STORE_CHILD_KEYS = "childKeys";
@@ -59,7 +74,10 @@ class QuantumPurse {
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
   }
 
-  /** Returns the singleton instance of QuantumPurse. */
+  /**
+   * Gets the singleton instance of QuantumPurse.
+   * @returns The singleton instance of QuantumPurse.
+   */
   public static getInstance(): QuantumPurse {
     if (!QuantumPurse.instance) {
       QuantumPurse.instance = new QuantumPurse(
@@ -103,7 +121,11 @@ class QuantumPurse {
     };
   }
 
-  /** Returns the blockchain address for the current signer. */
+  /**
+   * Gets the blockchain address for the current signer.
+   * @returns The CKB address as a string.
+   * @throws Error if no signer is set (see `getLock` for details).
+   */
   public getAddress(): string {
     const lock = this.getLock();
     return scriptToAddress(lock, IS_MAIN_NET);
@@ -117,10 +139,11 @@ class QuantumPurse {
   }
 
   /**
-   * Calculates the wallet's balance from the blockchain.
-   * @returns Balance in BigInt.
+   * Calculates the wallet's balance on the Nervos CKB blockchain.
+   * @returns A promise resolving to the balance in BigInt (in shannons).
+   * @throws Error if no signer is set (see `getLock` for details).
    */
-  public async getBalance(): Promise<BigInt> {
+  public async getBalance(): Promise<bigint> {
     const query: CKBIndexerQueryOptions = {
       lock: this.getLock(),
       type: "empty",
@@ -138,11 +161,12 @@ class QuantumPurse {
   }
 
   /**
-   * Signs a transaction using SPHINCS+.
-   * @param tx - Transaction skeleton to sign.
-   * @param password - Password to decrypt the private key to sign the message.
-   * @returns Signed transaction.
-   * @note password, decrypted private key are zerofilled after use.
+   * Signs a Nervos CKB transaction using the SPHINCS+ signature scheme.
+   * @param tx - The transaction skeleton to sign.
+   * @param password - The password to decrypt the private key (will be zeroed out after use).
+   * @returns A promise resolving to the signed transaction.
+   * @throws Error if no signer is set or decryption fails.
+   * @remark The password and sensitive data are overwritten with zeros after use for security.
    */
   public async sign(
     tx: TransactionSkeletonType,
@@ -167,7 +191,8 @@ class QuantumPurse {
       privateKey,
       hexStringToUint8Array(signingEntries[0].message),
       this.genNonce()
-    ); privateKey.fill(0); // Clear sensitive data
+    );
+    privateKey.fill(0); // Clear sensitive data
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
 
@@ -176,17 +201,20 @@ class QuantumPurse {
     return sealTransaction(tx, [witness]);
   }
 
-  /** Generates a 24-word seed phrase with 256-bit security. */
+  /**
+   * Generates a 24-word seed phrase with 256-bit security using BIP-39.
+   * @returns A mnemonic seed phrase as a string.
+   */
   public static generateSeedPhrase(): string {
     return bip39.generateMnemonic(wordlist, 256);
   }
 
   /**
-   * Encrypts data with AES-GCM.
-   * @param password - Password for encryption.
-   * @param input - Data to encrypt.
-   * @returns Encrypted data packet.
-   * @note password, encryption key are zerofilled after use.
+   * Encrypts data using AES-GCM with a password-derived key.
+   * @param password - The password for encryption (will be zeroed out).
+   * @param input - The data to encrypt as a Uint8Array (will be zeroed out).
+   * @returns A promise resolving to the encrypted data packet.
+   * @remark Password, input and sensitive data are are overwritten with zeros after use for security.
    */
   public async encrypt(
     password: Uint8Array,
@@ -201,7 +229,8 @@ class QuantumPurse {
       password,
       salt,
       this.SCRYPT_PARAMS_FOR_AES_KEY
-    ); password.fill(0); // Clear sensitive data
+    );
+    password.fill(0); // Clear sensitive data
 
     const cryptoKey = await globalThis.crypto.subtle.importKey(
       "raw",
@@ -209,7 +238,8 @@ class QuantumPurse {
       { name: "AES-GCM" },
       false,
       ["encrypt"]
-    ); key.fill(0); // Clear sensitive data
+    );
+    key.fill(0); // Clear sensitive data
 
     const encryptedData = await globalThis.crypto.subtle.encrypt(
       { name: "AES-GCM", iv },
@@ -226,12 +256,11 @@ class QuantumPurse {
   }
 
   /**
-   * Decrypts data using AES-GCM.
-   * @param password - Password for decryption.
-   * @param packet - Encrypted data packet.
-   * @returns Decrypted data or null if decryption fails.
-   * @warning to avoid leakage, handle the output carefully.
-   * @note password is zerofilled after use.
+   * Decrypts data using AES-GCM with a password-derived key.
+   * @param password - The password for decryption (will be zeroed out).
+   * @param packet - The encrypted data packet to decrypt.
+   * @returns A promise resolving to the decrypted data as a Uint8Array, or null if decryption fails.
+   * @remark The password is overwritten with zeros after use. Handle the output carefully to avoid leakage.
    */
   public async decrypt(
     password: Uint8Array,
@@ -245,7 +274,8 @@ class QuantumPurse {
       password,
       salt,
       this.SCRYPT_PARAMS_FOR_AES_KEY
-    ); password.fill(0); // Clear sensitive data
+    );
+    password.fill(0); // Clear sensitive data
 
     const cryptoKey = await globalThis.crypto.subtle.importKey(
       "raw",
@@ -253,7 +283,8 @@ class QuantumPurse {
       { name: "AES-GCM" },
       false,
       ["decrypt"]
-    ); key.fill(0); // Clear sensitive data
+    );
+    key.fill(0); // Clear sensitive data
 
     try {
       const decryptedData = await globalThis.crypto.subtle.decrypt(
@@ -268,7 +299,11 @@ class QuantumPurse {
     }
   }
 
-  /** Clears a specific object store in IndexedDB. */
+  /**
+   * Clears all data from a specific store in IndexedDB.
+   * @param dbKey - The store to clear ("masterKey" or "childKeys").
+   * @returns A promise that resolves when the store is cleared.
+   */
   public async dbClear(
     dbKey:
       | typeof QuantumPurse.STORE_MASTER_KEY
@@ -311,9 +346,7 @@ class QuantumPurse {
     });
   }
 
-  /** Stores an account object of type SphincsPlusSigner in IndexedDB.
-   * Helper for genAccount function
-   */
+  /** Stores an account object of type SphincsPlusSigner in IndexedDB. Helper for genAccount function */
   private async setAccount(input: SphincsPlusSigner): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
@@ -333,9 +366,9 @@ class QuantumPurse {
   }
 
   /**
-   * Retrieves an account of type SphincsPlusSigner from IndexedDB using a SPHINCS+ public key as db key.
-   * @param spxPubKey - The SPHINCS+ public key to look up in DB.
-   * @returns The matching SphincsPlusSigner object, or null.
+   * Retrieves an account from IndexedDB using the SPHINCS+ public key.
+   * @param spxPubKey - The hex-encoded SPHINCS+ public key to look up.
+   * @returns A promise resolving to the matching SphincsPlusSigner or null if not found.
    */
   public async getAccount(
     spxPubKey: string
@@ -350,7 +383,10 @@ class QuantumPurse {
     });
   }
 
-  /** Retrieves all account objects from IndexedDB. */
+  /**
+   * Retrieves all accounts from IndexedDB.
+   * @returns A promise resolving to an array of SphincsPlusSigner objects.
+   */
   public async getAccountList(): Promise<SphincsPlusSigner[]> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
@@ -363,9 +399,11 @@ class QuantumPurse {
   }
 
   /**
-   * Generate a new account derived from the master key (seed) and set the new account as signer.
-   * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
-   * @note password is zerofilled after use.
+   * Generates a new account derived from the master seed and sets it as the current signer.
+   * @param password - The password to decrypt the master seed and encrypt the child key (will be zeroed out).
+   * @returns A promise that resolves when the account is generated and set.
+   * @throws Error if the master seed is not found or decryption fails.
+   * @remark The password is overwritten with zeros after use for security.
    */
   public async genAccount(password: Uint8Array): Promise<void> {
     // Because decrypt by default will zero out the password, we need to clone the password.
@@ -382,13 +420,14 @@ class QuantumPurse {
     if (!seed) throw new Error("Seed decryption failed!");
 
     // Using master seed to derive a different 48-byte seed for sphincs+ keygen.
-    // Mostly this is key stretching from 256-bit master seed to 384 bit sphincs seed.
+    // This is basically key stretching from 256-bit master seed to 384 bit sphincs seed.
     // Bit-security isn't changed in this step.
     const sphincsSeed = await scryptAsync(
       seed,
       path,
       this.SCRYPT_PARAMS_FOR_SPX_KEY
-    ); seed.fill(0); // Clear sensitive data
+    );
+    seed.fill(0); // Clear sensitive data
 
     const sphincsPlusKey = slh_dsa_shake_128f.keygen(sphincsSeed);
     sphincsSeed.fill(0); // Clear sensitive data
@@ -409,26 +448,26 @@ class QuantumPurse {
     this.signer = currentAccount;
   }
 
-  /** Sets the current signer for SPHINCS+ operations. */
+  /**
+   * Sets the current signer for SPHINCS+ operations.
+   * @param signer - The SPHINCS+ signer to set.
+   */
   public setSigner(signer: SphincsPlusSigner): void {
     this.signer = signer;
   }
+
   /**
-   * Calculates the entropy of an aphabetical password in bits, aligned with antivirus.promo behavior.
-   * Processes the raw Uint8Array directly and overwrites it with fill(0) after use.
-   * @param password - The password as a Uint8Array (UTF-8 encoded), will be zeroed out after processing.
+   * Calculates the entropy of an alphabetical password in bits.
+   * @param password - The password as a Uint8Array (UTF-8 encoded). Will be zeroed out after processing.
    * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
-   * @note password is zerofilled after use.
+   * @remark The input password is overwritten with zeros after calculation for security.
    */
   public static calculateEntropy(password: Uint8Array): number {
-    // Validate input
     if (!password || password.length === 0) {
       return 0;
     }
 
-    const length = password.length; // Use byte length
-
-    // Estimate pool size based on ASCII character categories
+    const length = password.length;
     let hasLower = false,
       hasUpper = false,
       hasDigit = false,
@@ -449,14 +488,12 @@ class QuantumPurse {
       else if (byte > 127) hasNonAscii = true; // UTF-8 multi-byte
     }
 
-    // Determine pool size based on detected categories
     let poolSize = 0;
     if (hasLower) poolSize += 26; // Lowercase
     if (hasUpper) poolSize += 26; // Uppercase
     if (hasDigit) poolSize += 10; // Digits
     if (hasSymbol) poolSize += 32; // Symbols
 
-    // Handle edge cases and non-ASCII
     if (poolSize === 0) {
       poolSize = 1; // Minimum pool for all-same or uncategorized bytes (e.g., "aaa")
     }
@@ -465,20 +502,17 @@ class QuantumPurse {
       poolSize = Math.min(poolSize, 256); // Cap at byte max for UTF-8
     }
 
-    // Entropy = length * log2(poolSize), rounded down
     const entropy = Math.floor(length * Math.log2(poolSize));
-
-    // Overwrite the input password
     password.fill(0);
-
     return entropy;
   }
 
   /**
-   * Imports a wallet using a seed phrase.
-   * @param seedPhrase - Seed phrase to import in uint8 array format.
-   * @warning Overwrite current seed phrase in DB.
-   * @note password, seed are zerofill after use.
+   * Imports a seed phrase and stores it encrypted in IndexedDB, overwriting any existing seed.
+   * @param seedPhrase - The seed phrase as a Uint8Array (UTF-8 encoded).
+   * @param password - The password to encrypt the seed phrase (will be zeroed out).
+   * @returns A promise that resolves when the seed is imported.
+   * @remark SeedPhrase, password and sensitive data are overwritten with zeros after use for security.
    */
   public async importSeedPhrase(
     seedPhrase: Uint8Array,
@@ -492,11 +526,11 @@ class QuantumPurse {
   }
 
   /**
-   * Exports a wallet's seed phrase.
-   * @param password - your password to decrypt.
-   * @returns The seed phrase as a Uint8Array.
-   * @warning To avoid leakage, handle the ouput carefully.
-   * @note password is zerofilled after use.
+   * Exports the wallet's seed phrase.
+   * @param password - The password to decrypt the seed (will be zeroed out).
+   * @returns A promise resolving to the seed phrase as a Uint8Array.
+   * @throws Error if the master seed is not found or decryption fails.
+   * @remark The password is overwritten with zeros after use. Handle the returned seed carefully to avoid leakage.
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
     const packet = await this.getSeed();
@@ -506,5 +540,3 @@ class QuantumPurse {
     return seed;
   }
 }
-
-export default QuantumPurse;
