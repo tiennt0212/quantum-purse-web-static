@@ -49,7 +49,7 @@ class QuantumPurse {
   private SCRYPT_PARAMS_FOR_AES_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }; // to gen AES maximum 256 bits long key
   private SCRYPT_PARAMS_FOR_SPX_KEY = { N: 2 ** 16, r: 8, p: 1, dkLen: 48 }; // sphincs+ key gen requires 48-byte seed
   private DB: Promise<IDBDatabase> | null = null; // indexed db inferface
-  private currentSigner?: SphincsPlusSigner;
+  private signer?: SphincsPlusSigner;
   private static instance: QuantumPurse | null = null; // Singleton instance
 
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
@@ -91,19 +91,19 @@ class QuantumPurse {
     return this.DB;
   }
 
-  /** Generates the lock script for the current signer. */
-  private getLockScript(): Script {
-    if (!this.currentSigner) throw new Error("Signer not available!");
+  /** Generates the ckb lock script for the current signer. */
+  private getLock(): Script {
+    if (!this.signer) throw new Error("Signer not available!");
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
-      args: ckbHash(this.currentSigner.sphincsPlusPubKey),
+      args: ckbHash(this.signer.sphincsPlusPubKey),
     };
   }
 
   /** Returns the blockchain address for the current signer. */
   public getAddress(): string {
-    const lock = this.getLockScript();
+    const lock = this.getLock();
     return scriptToAddress(lock, IS_MAIN_NET);
   }
 
@@ -120,7 +120,7 @@ class QuantumPurse {
    */
   public async getBalance(): Promise<BigInt> {
     const query: CKBIndexerQueryOptions = {
-      lock: this.getLockScript(),
+      lock: this.getLock(),
       type: "empty",
     };
     const cellCollector = new CellCollector(
@@ -145,15 +145,15 @@ class QuantumPurse {
     tx: TransactionSkeletonType,
     password: Uint8Array
   ): Promise<Transaction> {
-    if (!this.currentSigner) throw new Error("Signer not available!");
+    if (!this.signer) throw new Error("Signer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN + hexStringToUint8Array(this.currentSigner.sphincsPlusPubKey).length;
+      QuantumPurse.SPX_SIG_LEN + hexStringToUint8Array(this.signer.sphincsPlusPubKey).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
     const signingEntries = tx.get("signingEntries").toArray();
-    const privateKey = await this.decrypt(password, this.currentSigner.sphincsPlusPriEnc);
+    const privateKey = await this.decrypt(password, this.signer.sphincsPlusPriEnc);
     if (!privateKey) throw new Error("Failed to decrypt private key");
 
     const signature = slh_dsa_shake_128f.sign(
@@ -166,7 +166,7 @@ class QuantumPurse {
     const serializedSignature = new Reader(signature.buffer).serializeJson();
 
     const witness =
-      serializedSignature + this.currentSigner.sphincsPlusPubKey.replace(/^0x/, "");
+      serializedSignature + this.signer.sphincsPlusPubKey.replace(/^0x/, "");
     return sealTransaction(tx, [witness]);
   }
 
@@ -267,10 +267,10 @@ class QuantumPurse {
   }
 
   /**
-   * Stores encrypted master key (seed) in IndexedDB.
+   * Stores a single encrypted master key (seed) in IndexedDB.
    * @warning Overwrites existing data in IndexedDB.
    */
-  public async dbSetMasterKey(input: EncryptionPacket): Promise<void> {
+  public async setSeed(input: EncryptionPacket): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readwrite");
     const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
@@ -281,8 +281,8 @@ class QuantumPurse {
     });
   }
 
-  /** Retrieves encrypted master key (seed) from IndexedDB. */
-  public async dbGetMasterKey(): Promise<EncryptionPacket | null> {
+  /** Retrieves the single encrypted master key (seed) from IndexedDB. */
+  public async getSeed(): Promise<EncryptionPacket | null> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_MASTER_KEY, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_MASTER_KEY);
@@ -293,8 +293,8 @@ class QuantumPurse {
     });
   }
 
-  /** Stores encrypted child key data in IndexedDB. */
-  public async dbSetChildKey(input: SphincsPlusSigner): Promise<void> {
+  /** Stores an account object of type SphincsPlusSigner in IndexedDB. */
+  private async setAccount(input: SphincsPlusSigner): Promise<void> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readwrite");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
@@ -313,23 +313,23 @@ class QuantumPurse {
   }
 
   /**
-   * Retrieves a SphincsPlusSigner object from IndexedDB using a SPHINCS+ public key.
-   * @param key - The SPHINCS+ public key to look up in DB.
+   * Retrieves an account of type SphincsPlusSigner from IndexedDB using a SPHINCS+ public key as db key.
+   * @param spxPubKey - The SPHINCS+ public key to look up in DB.
    * @returns The matching SphincsPlusSigner object, or null.
    */
-  public async dbGetChildKey(key: string): Promise<SphincsPlusSigner | null> {
+  public async getAccount(spxPubKey: string): Promise<SphincsPlusSigner | null> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
-    const request = store.get(key);
+    const request = store.get(spxPubKey);
     return new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => reject(request.error);
     });
   }
 
-  /** Retrieves all child key data from IndexedDB. */
-  public async dbGetChildKeys(): Promise<SphincsPlusSigner[]> {
+  /** Retrieves all account objects from IndexedDB. */
+  public async getAccountList(): Promise<SphincsPlusSigner[]> {
     const db = await this.getDB();
     const tx = db.transaction(QuantumPurse.STORE_CHILD_KEYS, "readonly");
     const store = tx.objectStore(QuantumPurse.STORE_CHILD_KEYS);
@@ -341,18 +341,18 @@ class QuantumPurse {
   }
 
   /**
-   * Creates a new account derived from the master key (seed).
+   * Generate a new account derived from the master key (seed) and set the new account as signer.
    * @param password - Password to decrypt the encrypted master key (seed) and encrypt the child key.
    */
-  public async deriveChildKey(password: Uint8Array): Promise<void> {
+  public async genAccount(password: Uint8Array): Promise<void> {
     // Because decrypt by default will zero out the password, we need to clone the password.
     // Although this can be redesigned to let user decrypt master seed then derive keys,
     // it's more secure to do it in side this function automatically then dispose the password.
     const passwordClone = new Uint8Array(password);
-    const childKeys = await this.dbGetChildKeys();
+    const childKeys = await this.getAccountList();
     const path = `pq/ckb/${childKeys.length}`;
 
-    const packet = await this.dbGetMasterKey();
+    const packet = await this.getSeed();
     if (!packet) throw new Error("Master key (seed) not found!");
 
     const seed = await this.decrypt(password, packet);
@@ -372,8 +372,8 @@ class QuantumPurse {
       sphincsPlusPriEnc: encryptedChild,
     };
 
-    await this.dbSetChildKey(currentAccount);
-    this.currentSigner = currentAccount;
+    await this.setAccount(currentAccount);
+    this.signer = currentAccount;
 
     // Clear sensitive data
     password.fill(0);
@@ -385,15 +385,15 @@ class QuantumPurse {
 
   /** Sets the current signer for SPHINCS+ operations. */
   public setSigner(signer: SphincsPlusSigner): void {
-    this.currentSigner = signer;
+    this.signer = signer;
   }
   /**
-   * Calculates the entropy of a password in bits, aligned with antivirus.promo behavior.
+   * Calculates the entropy of an aphabetical password in bits, aligned with antivirus.promo behavior.
    * Processes the raw Uint8Array directly and overwrites it with fill(0) after use.
    * @param password - The password as a Uint8Array (UTF-8 encoded), will be zeroed out after processing.
    * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
    */
-  public static calculatePasswordEntropy(password: Uint8Array): number {
+  public static calculateEntropy(password: Uint8Array): number {
     // Validate input
     if (!password || password.length === 0) {
       return 0;
@@ -449,24 +449,24 @@ class QuantumPurse {
 
   /**
    * Imports a wallet using a seed phrase.
-   * @param seedPhrase - Seed phrase to import.
+   * @param seedPhrase - Seed phrase to import in uint8 array format.
    * @warning Overwrite current seed phrase in DB.
    */
   public async importSeedPhrase(seedPhrase: Uint8Array, password: Uint8Array): Promise<void> {
     const packet = await this.encrypt(password, seedPhrase);
-    await this.dbSetMasterKey(packet);
+    await this.setSeed(packet);
     seedPhrase.fill(0);
     password.fill(0);
   }
 
   /**
    * Exports a wallet's seed phrase.
-   * @param walletId - Wallet ID to export.
+   * @param password - your password to decrypt.
    * @returns The seed phrase as a Uint8Array.
    * @warning To avoid leakage, handle the ouput carefully.
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
-    const packet = await this.dbGetMasterKey();
+    const packet = await this.getSeed();
     if (!packet) throw new Error("Master key (seed) not found!");
     const seed = await this.decrypt(password, packet);
     if (!seed) throw new Error("Master key (seed) decryption failed!");

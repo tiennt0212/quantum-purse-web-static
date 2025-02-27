@@ -66,8 +66,8 @@ describe("Integration Test for Quantum Purse", () => {
       utf8ToBytes(passwordStr),
       seedByte
     );
-    await wallet.dbSetMasterKey(encryptedSeed);
-    await wallet.deriveChildKey(utf8ToBytes(passwordStr));
+    await wallet.setSeed(encryptedSeed);
+    await wallet.genAccount(utf8ToBytes(passwordStr));
 
     QPAddress = wallet.getAddress();
 
