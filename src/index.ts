@@ -1,14 +1,14 @@
-import './styles.css'
+import './styles.css';
 import Icon from './icon.png';
 
 // Add title
-const text: string = 'A quantum resistant wallet for ckb blockchain'
-const $content = document.querySelector('#content')
+const text: string = 'A quantum resistant wallet for ckb blockchain';
+const $content = document.querySelector('#content');
 if ($content) {
   $content.textContent = text;
 }
 
-// ass the icon.
+// Add the icon
 const myIcon = new Image();
 myIcon.src = Icon;
 

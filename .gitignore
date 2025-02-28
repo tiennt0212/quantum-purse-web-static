@@ -111,3 +111,4 @@ package-lock.json
 key-manager/pkg/
 key-manager/target/
 key-manager/Cargo.lock
+target/

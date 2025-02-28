@@ -49,7 +49,4 @@ module.exports = {
       chunks: "all",
     },
   },
-  // experiments: {
-  //   asyncWebAssembly: true,
-  // },
 };
