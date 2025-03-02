@@ -330,7 +330,6 @@ pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
     // sphincs_seed.zeroize();
     password_clone.zeroize();
     pri_key_bytes.zeroize();
-    debug!("---end gen_child_key");
 
     Ok(())
 }
