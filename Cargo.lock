@@ -387,7 +387,6 @@ dependencies = [
  "getrandom",
  "hex",
  "indexed_db_futures",
- "js-sys",
  "scrypt",
  "serde",
  "serde-wasm-bindgen",

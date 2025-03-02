@@ -2,17 +2,15 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
+use getrandom::getrandom;
+use scrypt::{scrypt, Params};
 use bip39::{Language, Mnemonic};
 use fips205::slh_dsa_shake_128f;
 use fips205::traits::{SerDes, Signer, Verifier};
-use getrandom::getrandom;
-use hex::{decode, encode};
-use js_sys::Uint8Array;
-use scrypt::{scrypt, Params};
-use wasm_bindgen::{prelude::*, JsValue};
-use web_sys::console;
 use zeroize::{Zeroize, ZeroizeOnDrop};
-
+use hex::{decode, encode};
+use wasm_bindgen::{prelude::*, JsValue};
+use web_sys::{js_sys::Uint8Array, console};
 use indexed_db_futures::{
     database::Database, error::Error, prelude::*, transaction::TransactionMode,
 };
