@@ -229,7 +229,8 @@ pub fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String
 
     // Derive key using Scrypt
     let mut scrypt_key = vec![0u8; 32];
-    scrypt(password, &salt, &Params::default(), &mut scrypt_key)
+    let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO check perf/security tradeoffs
+    scrypt(password, &salt, &scrypt_param, &mut scrypt_key)
         .map_err(|e| format!("Scrypt error: {:?}", e))?;
 
     // Encrypt using AES-GCM
@@ -255,12 +256,13 @@ pub fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, Str
     // Decode hex strings to bytes
     let salt = decode(packet.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
     let iv = decode(packet.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
-    let cipher_text = decode(packet.cipher_text)
-        .map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
+    let cipher_text =
+        decode(packet.cipher_text).map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
 
     // Derive key using Scrypt
     let mut scrypt_key = vec![0u8; 32];
-    scrypt(password, &salt, &Params::default(), &mut scrypt_key)
+    let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO check perf/security tradeoffs
+    scrypt(password, &salt, &scrypt_param, &mut scrypt_key)
         .map_err(|e| format!("Scrypt error: {:?}", e))?;
 
     // Decrypt using AES-GCM
@@ -299,13 +301,9 @@ pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
     let child_index = child_keys.len();
     let path = format!("pq/ckb/{}", child_index);
     let mut sphincs_seed = vec![0u8; 32];
-    scrypt(
-        &seed,
-        path.as_bytes(),
-        &Params::default(),
-        &mut sphincs_seed,
-    )
-    .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
+    let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO check perf/security tradeoffs
+    scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
+        .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
     let mut rng = rand_chacha::ChaCha8Rng::from_seed(
         sphincs_seed
             .try_into()
@@ -317,10 +315,7 @@ pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
     let mut pri_key_bytes = pri_key.into_bytes();
 
     // Encrypt private key
-    let encrypted_pri = encrypt(
-        &password_clone,
-        &pri_key_bytes,
-    )?;
+    let encrypted_pri = encrypt(&password_clone, &pri_key_bytes)?;
 
     let child_key = SphincsPlusSigner {
         sphincs_plus_pub_key: encode(pub_key.into_bytes()),
@@ -335,6 +330,7 @@ pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
     // sphincs_seed.zeroize();
     password_clone.zeroize();
     pri_key_bytes.zeroize();
+    debug!("---end gen_child_key");
 
     Ok(())
 }
