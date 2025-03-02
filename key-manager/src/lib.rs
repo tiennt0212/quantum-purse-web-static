@@ -21,6 +21,14 @@ use serde::{Deserialize, Serialize};
 // for communication between wasm and JS
 use serde_wasm_bindgen;
 
+// for debuging
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        web_sys::console::log_1(&format!($($arg)*).into());
+    }
+}
+
 // Structure for encrypted data packet
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncryptionPacket {
@@ -191,6 +199,23 @@ pub fn gen_seed_phrase() -> Mnemonic {
     let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
     entropy.zeroize();
     return mnemonic;
+}
+
+/// init seed phrase, encrypt and store in db
+#[wasm_bindgen]
+pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
+    let mnemonic = gen_seed_phrase();
+    let mut seed = mnemonic.to_seed("");
+    let mut password = password.to_vec();
+    let encrypted_seed = encrypt(&password, &seed)
+        .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
+    seed.zeroize();
+    password.zeroize();
+    set_master_seed(encrypted_seed)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
+
+    Ok(())
 }
 
 /// Encrypts data using AES-GCM with a password-derived key.
