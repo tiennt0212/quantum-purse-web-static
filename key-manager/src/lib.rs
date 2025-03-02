@@ -185,6 +185,34 @@ pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, Error> {
     Ok(child_keys)
 }
 
+// Helper function to clear a specific object store
+async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), JsValue> {
+    let tx = db
+        .transaction(store_name)
+        .with_mode(TransactionMode::Readwrite)
+        .build()
+        .map_err(|e| JsValue::from_str(&format!("Error starting transaction for {}: {}", store_name, e)))?;
+    let store = tx
+        .object_store(store_name)
+        .map_err(|e| JsValue::from_str(&format!("Error getting {}: {}", store_name, e)))?;
+    store
+        .clear()
+        .map_err(|e| JsValue::from_str(&format!("Error clearing {}: {}", store_name, e)))?;
+    tx.commit()
+        .await
+        .map_err(|e| JsValue::from_str(&format!("Error committing transaction for {}: {}", store_name, e)))?;
+    Ok(())
+}
+
+// Public function to clear the database
+#[wasm_bindgen]
+pub async fn clear_database() -> Result<(), JsValue> {
+    let db = open_db().await.map_err(|e| JsValue::from_str(&format!("Error opening database: {}", e)))?;
+    clear_object_store(&db, MASTER_KEY_STORE).await?;
+    clear_object_store(&db, CHILD_KEYS_STORE).await?;
+    Ok(())
+}
+
 // TODO private function
 // TODO check random source in javascript side!
 pub fn get_random_bytes(length: usize) -> Result<Vec<u8>, String> {
