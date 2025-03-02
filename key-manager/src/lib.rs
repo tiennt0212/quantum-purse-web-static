@@ -2,25 +2,26 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use getrandom::getrandom;
-use scrypt::{scrypt, Params};
 use bip39::{Language, Mnemonic};
 use fips205::slh_dsa_shake_128f;
-use fips205::traits::{SerDes, Signer, Verifier};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use fips205::traits::{SerDes, Signer};
+use getrandom::getrandom;
 use hex::{decode, encode};
-use wasm_bindgen::{prelude::*, JsValue};
-use web_sys::{js_sys::Uint8Array, console};
 use indexed_db_futures::{
     database::Database, error::Error, prelude::*, transaction::TransactionMode,
 };
+use rand_chacha::rand_core::SeedableRng;
+use scrypt::{scrypt, Params};
+use wasm_bindgen::{prelude::*, JsValue};
+use web_sys::{console, js_sys::Uint8Array};
+use zeroize::Zeroize;
+
 // for internal encryption & decryption
 use serde::{Deserialize, Serialize};
 // for communication between wasm and JS
 use serde_wasm_bindgen;
 
 // Structure for encrypted data packet
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncryptionPacket {
     salt: String,        // Hex-encoded
@@ -177,7 +178,7 @@ pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, Error> {
 }
 
 // TODO private function
-// js_value trace in js env will be disposed by the javascript GC!
+// TODO check javascript side!
 pub fn get_random_bytes(length: usize) -> Result<Vec<u8>, JsValue> {
     let mut buffer = vec![0u8; length];
     getrandom(buffer.as_mut_slice()).map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -185,15 +186,14 @@ pub fn get_random_bytes(length: usize) -> Result<Vec<u8>, JsValue> {
 }
 
 /// Generate bip39 seed phrase and encrypt it
-#[wasm_bindgen]
-pub fn gen_seed_phrase() {
-    let mut entropy = get_random_bytes(32).unwrap(); // 32 bytes for 256-bit entropy
-    let mut mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
+pub fn gen_seed_phrase() -> Mnemonic {
+    let mut entropy = get_random_bytes(32).unwrap(); // 256-bit entropy
+    let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
     entropy.zeroize();
+    return mnemonic;
 }
 
 /// Encrypts data using AES-GCM with a password-derived key.
-#[wasm_bindgen]
 pub fn encrypt(password: Uint8Array, input: Uint8Array) -> Result<EncryptionPacket, JsValue> {
     let mut password = password.to_vec();
     let mut input = input.to_vec();
@@ -230,7 +230,6 @@ pub fn encrypt(password: Uint8Array, input: Uint8Array) -> Result<EncryptionPack
 }
 
 /// Decrypts data using AES-GCM with a password-derived key.
-#[wasm_bindgen]
 pub fn decrypt(password: Uint8Array, packet: EncryptionPacket) -> Result<Uint8Array, JsValue> {
     let mut password = password.to_vec();
     let salt = decode(packet.salt)
@@ -261,28 +260,41 @@ pub fn decrypt(password: Uint8Array, packet: EncryptionPacket) -> Result<Uint8Ar
 
 /// Generates a new SPHINCS+ account from a master seed.
 #[wasm_bindgen]
-pub fn gen_account(
-    password: Uint8Array,
-    encrypted_seed: EncryptionPacket,
-    child_index: u32, // TODO
-) -> Result<SphincsPlusSigner, JsValue> {
+pub async fn gen_account(password: Uint8Array) -> Result<(), JsValue> {
     let password = password.to_vec();
     let mut password_clone = password.clone();
 
-    // Decrypt master seed
-    let seed = decrypt(Uint8Array::from(password.as_slice()), encrypted_seed)?;
-    let mut seed = seed.to_vec();
+    // Helper to convert IndexedDB errors to JsValue
+    fn db_error_to_jsvalue(e: Error) -> JsValue {
+        JsValue::from_str(&format!("Database error: {}", e))
+    }
+
+    let master_seed = get_master_seed()
+        .await
+        .map_err(db_error_to_jsvalue)?
+        .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
+    let mut seed = decrypt(Uint8Array::from(password.as_slice()), master_seed)?.to_vec();
 
     // Derive SPHINCS+ seed using path
+    let child_keys = get_child_keys().await.map_err(db_error_to_jsvalue)?;
+    let child_index = child_keys.len();
     let path = format!("pq/ckb/{}", child_index);
-    let scrypt_params = Params::new(16, 8, 1, 48).unwrap();
-    let mut sphincs_seed = vec![0u8; 48];
-    scrypt(&seed, path.as_bytes(), &scrypt_params, &mut sphincs_seed)
-        .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
+    let mut sphincs_seed = vec![0u8; 32];
+    scrypt(
+        &seed,
+        path.as_bytes(),
+        &Params::default(),
+        &mut sphincs_seed,
+    )
+    .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
+    let mut rng = rand_chacha::ChaCha8Rng::from_seed(
+        sphincs_seed
+            .try_into()
+            .expect("slice with incorrect length"),
+    );
 
     // Generate SPHINCS+ key pair
-    // TODO random fallback
-    let (pub_key, pri_key) = slh_dsa_shake_128f::try_keygen()?;
+    let (pub_key, pri_key) = slh_dsa_shake_128f::try_keygen_with_rng(&mut rng)?;
     let mut pri_key_bytes = pri_key.into_bytes();
 
     // Encrypt private key
@@ -291,37 +303,45 @@ pub fn gen_account(
         Uint8Array::from(pri_key_bytes.as_slice()),
     )?;
 
+    let child_key = SphincsPlusSigner {
+        sphincs_plus_pub_key: encode(pub_key.into_bytes()),
+        sphincs_plus_pri_enc: encrypted_pri,
+    };
+
+    set_child_key(child_key)
+        .await
+        .map_err(db_error_to_jsvalue)?;
+
     seed.zeroize();
-    sphincs_seed.zeroize();
+    // sphincs_seed.zeroize();
     password_clone.zeroize();
     pri_key_bytes.zeroize();
 
-    // TODO not return but settle to DB
-    Ok(SphincsPlusSigner {
-        sphincs_plus_pub_key: encode(pub_key.into_bytes()),
-        sphincs_plus_pri_enc: encrypted_pri,
-    })
+    Ok(())
 }
 
 /// Imports a seed phrase by encrypting it.
 #[wasm_bindgen]
-pub fn import_seed_phrase(
+pub async fn import_seed_phrase(
     seed_phrase: Uint8Array,
     password: Uint8Array,
-) -> Result<EncryptionPacket, JsValue> {
+) -> Result<(), JsValue> {
     let mut seed_phrase = seed_phrase.to_vec();
     let encrypted_seed = encrypt(password, Uint8Array::from(seed_phrase.as_slice()))?;
     seed_phrase.zeroize();
-    // TODO settle to DB
-    Ok(encrypted_seed)
+    set_master_seed(encrypted_seed)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
+    Ok(())
 }
 
 /// Exports the seed phrase by decrypting it.
 #[wasm_bindgen]
-pub fn export_seed_phrase(
-    password: Uint8Array,
-    encrypted_seed: EncryptionPacket,
-) -> Result<Uint8Array, JsValue> {
+pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
+    let encrypted_seed = get_master_seed()
+        .await
+        .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?
+        .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
     let seed = decrypt(password, encrypted_seed)?;
     Ok(seed)
 }
@@ -333,17 +353,12 @@ pub fn sign(
     signer: SphincsPlusSigner,
     message: Uint8Array,
 ) -> Result<Uint8Array, JsValue> {
-    let mut password = password.to_vec();
-    let pri_key = decrypt(
-        Uint8Array::from(password.as_slice()),
-        signer.sphincs_plus_pri_enc,
-    )?;
-    let mut pri_key = pri_key.to_vec();
-
-    // let signing_key = SigningKey::<slh_dsa_shake_128f>::from_bytes(&pri_key)
-    //     .map_err(|e| JsValue::from_str(&format!("Invalid private key: {:?}", e)))?;
-    // let signature = signing_key.sign(&message.to_vec());
-    pri_key.zeroize();
-
-    Ok(Uint8Array::from(password.as_slice()))
+    let pri_key_bytes = decrypt(password, signer.sphincs_plus_pri_enc)?.to_vec();
+    let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
+        &pri_key_bytes.try_into().expect("Fail to parse private key"),
+    )
+    .map_err(|e| JsValue::from_str(&format!("Unable to load private key: {:?}", e)))?;
+    let signature = signing_key.try_sign(&message.to_vec(), &[], true)?;
+    signing_key.zeroize();
+    Ok(Uint8Array::from(signature.as_slice()))
 }
