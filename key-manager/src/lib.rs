@@ -178,10 +178,10 @@ pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, Error> {
 }
 
 // TODO private function
-// TODO check javascript side!
-pub fn get_random_bytes(length: usize) -> Result<Vec<u8>, JsValue> {
+// TODO check random source in javascript side!
+pub fn get_random_bytes(length: usize) -> Result<Vec<u8>, String> {
     let mut buffer = vec![0u8; length];
-    getrandom(buffer.as_mut_slice()).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    getrandom(buffer.as_mut_slice()).map_err(|e| e.to_string())?;
     Ok(buffer)
 }
 
@@ -194,33 +194,29 @@ pub fn gen_seed_phrase() -> Mnemonic {
 }
 
 /// Encrypts data using AES-GCM with a password-derived key.
-pub fn encrypt(password: Uint8Array, input: Uint8Array) -> Result<EncryptionPacket, JsValue> {
-    let mut password = password.to_vec();
-    let mut input = input.to_vec();
-
+pub fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String> {
     // Generate random salt and IV
     let mut salt = vec![0u8; SALT_LENGTH];
     let mut iv = vec![0u8; IV_LENGTH];
-    let random_bytes = get_random_bytes(SALT_LENGTH + IV_LENGTH).unwrap();
+    let random_bytes = get_random_bytes(SALT_LENGTH + IV_LENGTH).map_err(|e| e.to_string())?;
     salt.copy_from_slice(&random_bytes[0..SALT_LENGTH]);
     iv.copy_from_slice(&random_bytes[SALT_LENGTH..]);
 
     // Derive key using Scrypt
     let mut scrypt_key = vec![0u8; 32];
-    scrypt(&password, &salt, &Params::default(), &mut scrypt_key)
-        .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
+    scrypt(password, &salt, &Params::default(), &mut scrypt_key)
+        .map_err(|e| format!("Scrypt error: {:?}", e))?;
 
     // Encrypt using AES-GCM
     let aes_key: &Key<Aes256Gcm> = Key::<Aes256Gcm>::from_slice(&scrypt_key);
     let cipher = Aes256Gcm::new(aes_key);
     let nonce = Nonce::from_slice(&iv);
     let cipher_text = cipher
-        .encrypt(nonce, input.as_ref())
-        .map_err(|e| JsValue::from_str(&format!("Encryption error: {:?}", e)))?;
+        .encrypt(nonce, input)
+        .map_err(|e| format!("Encryption error: {:?}", e))?;
 
-    password.zeroize();
-    scrypt_key.zeroize(); // aes_key gone
-    input.zeroize();
+    // Zeroize sensitive data
+    scrypt_key.zeroize();
 
     Ok(EncryptionPacket {
         salt: encode(salt),
@@ -230,19 +226,17 @@ pub fn encrypt(password: Uint8Array, input: Uint8Array) -> Result<EncryptionPack
 }
 
 /// Decrypts data using AES-GCM with a password-derived key.
-pub fn decrypt(password: Uint8Array, packet: EncryptionPacket) -> Result<Uint8Array, JsValue> {
-    let mut password = password.to_vec();
-    let salt = decode(packet.salt)
-        .map_err(|e| JsValue::from_str(&format!("Salt decode error: {:?}", e)))?;
-    let iv =
-        decode(packet.iv).map_err(|e| JsValue::from_str(&format!("IV decode error: {:?}", e)))?;
+pub fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String> {
+    // Decode hex strings to bytes
+    let salt = decode(packet.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
+    let iv = decode(packet.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
     let cipher_text = decode(packet.cipher_text)
-        .map_err(|e| JsValue::from_str(&format!("Ciphertext decode error: {:?}", e)))?;
+        .map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
 
     // Derive key using Scrypt
     let mut scrypt_key = vec![0u8; 32];
-    scrypt(&password, &salt, &Params::default(), &mut scrypt_key)
-        .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
+    scrypt(password, &salt, &Params::default(), &mut scrypt_key)
+        .map_err(|e| format!("Scrypt error: {:?}", e))?;
 
     // Decrypt using AES-GCM
     let aes_key: &Key<Aes256Gcm> = Key::<Aes256Gcm>::from_slice(&scrypt_key);
@@ -250,17 +244,17 @@ pub fn decrypt(password: Uint8Array, packet: EncryptionPacket) -> Result<Uint8Ar
     let nonce = Nonce::from_slice(&iv);
     let plain_text = cipher
         .decrypt(nonce, cipher_text.as_ref())
-        .map_err(|e| JsValue::from_str(&format!("Decryption error: {:?}", e)))?;
+        .map_err(|e| format!("Decryption error: {:?}", e))?;
 
-    password.zeroize();
+    // Zeroize sensitive data
     scrypt_key.zeroize();
 
-    Ok(Uint8Array::from(plain_text.as_slice()))
+    Ok(plain_text)
 }
 
-/// Generates a new SPHINCS+ account from a master seed.
+/// Generates a new SPHINCS+ key from a master seed.
 #[wasm_bindgen]
-pub async fn gen_account(password: Uint8Array) -> Result<(), JsValue> {
+pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
     let password = password.to_vec();
     let mut password_clone = password.clone();
 
@@ -273,7 +267,7 @@ pub async fn gen_account(password: Uint8Array) -> Result<(), JsValue> {
         .await
         .map_err(db_error_to_jsvalue)?
         .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
-    let mut seed = decrypt(Uint8Array::from(password.as_slice()), master_seed)?.to_vec();
+    let mut seed = decrypt(&password, master_seed)?.to_vec();
 
     // Derive SPHINCS+ seed using path
     let child_keys = get_child_keys().await.map_err(db_error_to_jsvalue)?;
@@ -299,8 +293,8 @@ pub async fn gen_account(password: Uint8Array) -> Result<(), JsValue> {
 
     // Encrypt private key
     let encrypted_pri = encrypt(
-        Uint8Array::from(password_clone.as_slice()),
-        Uint8Array::from(pri_key_bytes.as_slice()),
+        &password_clone,
+        &pri_key_bytes,
     )?;
 
     let child_key = SphincsPlusSigner {
@@ -321,13 +315,16 @@ pub async fn gen_account(password: Uint8Array) -> Result<(), JsValue> {
 }
 
 /// Imports a seed phrase by encrypting it.
+/// Not recommended since this creates seed exposure in js side
 #[wasm_bindgen]
 pub async fn import_seed_phrase(
     seed_phrase: Uint8Array,
     password: Uint8Array,
 ) -> Result<(), JsValue> {
+    let mut password = password.to_vec();
     let mut seed_phrase = seed_phrase.to_vec();
-    let encrypted_seed = encrypt(password, Uint8Array::from(seed_phrase.as_slice()))?;
+    let encrypted_seed = encrypt(&password, &seed_phrase)?;
+    password.zeroize();
     seed_phrase.zeroize();
     set_master_seed(encrypted_seed)
         .await
@@ -338,12 +335,14 @@ pub async fn import_seed_phrase(
 /// Exports the seed phrase by decrypting it.
 #[wasm_bindgen]
 pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
+    let mut password = password.to_vec();
     let encrypted_seed = get_master_seed()
         .await
         .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?
         .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
-    let seed = decrypt(password, encrypted_seed)?;
-    Ok(seed)
+    password.zeroize();
+    let seed = decrypt(&password, encrypted_seed)?;
+    Ok(Uint8Array::from(seed.as_slice()))
 }
 
 /// Signs a message with SPHINCS+ after decrypting the private key.
@@ -353,12 +352,14 @@ pub fn sign(
     signer: SphincsPlusSigner,
     message: Uint8Array,
 ) -> Result<Uint8Array, JsValue> {
-    let pri_key_bytes = decrypt(password, signer.sphincs_plus_pri_enc)?.to_vec();
+    let mut password = password.to_vec();
+    let pri_key_bytes = decrypt(&password, signer.sphincs_plus_pri_enc)?.to_vec();
     let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
         &pri_key_bytes.try_into().expect("Fail to parse private key"),
     )
     .map_err(|e| JsValue::from_str(&format!("Unable to load private key: {:?}", e)))?;
     let signature = signing_key.try_sign(&message.to_vec(), &[], true)?;
+    password.zeroize();
     signing_key.zeroize();
     Ok(Uint8Array::from(signature.as_slice()))
 }
