@@ -8,20 +8,19 @@ use fips205::traits::{SerDes, Signer};
 use getrandom::getrandom;
 use hex::{decode, encode};
 use indexed_db_futures::{
-    database::Database, error::Error, prelude::*, transaction::TransactionMode,
+    database::Database, error::Error as DBError, prelude::*, transaction::TransactionMode,
 };
 use rand_chacha::rand_core::SeedableRng;
 use scrypt::{scrypt, Params};
+use serde::{Deserialize, Serialize};
+use serde_wasm_bindgen;
 use wasm_bindgen::{prelude::*, JsValue};
-use web_sys::{console, js_sys::Uint8Array};
+use web_sys::js_sys::Uint8Array;
 use zeroize::Zeroize;
 
-// for internal encryption & decryption
-use serde::{Deserialize, Serialize};
-// for communication between wasm and JS
-use serde_wasm_bindgen;
+mod errors;
+use crate::errors::QuantumPurseError;
 
-// for debuging
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -29,7 +28,6 @@ macro_rules! debug {
     }
 }
 
-// Structure for encrypted data packet
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EncryptionPacket {
     salt: String,        // Hex-encoded
@@ -37,7 +35,6 @@ pub struct EncryptionPacket {
     cipher_text: String, // Hex-encoded
 }
 
-// Structure for SPHINCS+ signer
 #[wasm_bindgen]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SphincsPlusSigner {
@@ -53,77 +50,84 @@ const MASTER_KEY_STORE: &str = "master_key_store";
 const CHILD_KEYS_STORE: &str = "child_keys_store";
 const MASTER_KEY: &str = "master_key";
 
-async fn open_db() -> Result<Database, Error> {
-    let db = Database::open(DB_NAME)
+async fn open_db() -> Result<Database, QuantumPurseError> {
+    Database::open(DB_NAME)
         .with_version(1u8)
-        .with_on_blocked(|_event| {
-            console::log_1(&"Database upgrade blocked.".into());
-            Ok(())
-        })
+        .with_on_blocked(|_event| Ok(()))
         .with_on_upgrade_needed(|_event, db| {
-            // Create master_key_store if it doesn't exist
             if !db.object_store_names().any(|name| name == MASTER_KEY_STORE) {
                 db.create_object_store(MASTER_KEY_STORE).build()?;
             }
-            // Create child_keys_store if it doesn't exist
             if !db.object_store_names().any(|name| name == CHILD_KEYS_STORE) {
                 db.create_object_store(CHILD_KEYS_STORE).build()?;
             }
             Ok(())
         })
         .await
-        .map_err(|e| {
-            Error::from(JsValue::from_str(&format!(
-                "Error opening IndexedDB: {}",
-                e
-            )))
-        })?;
-    Ok(db)
+        .map_err(|e| QuantumPurseError::DatabaseError(format!("Failed to open IndexedDB: {}", e)))
 }
 
-pub async fn set_master_seed(encryption_packet: EncryptionPacket) -> Result<(), Error> {
+async fn set_master_seed(encryption_packet: EncryptionPacket) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
         .with_mode(TransactionMode::Readwrite)
-        .build()?;
-    let store = tx.object_store(MASTER_KEY_STORE)?;
+        .build()
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    let store = tx
+        .object_store(MASTER_KEY_STORE)
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
 
     let js_value = serde_wasm_bindgen::to_value(&encryption_packet)
-        .map_err(|e| Error::from(JsValue::from_str(&e.to_string())))?;
+        .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
 
-    store.put(&js_value).with_key(MASTER_KEY).await?;
-    tx.commit().await?;
+    store
+        .put(&js_value)
+        .with_key(MASTER_KEY)
+        .await
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
     Ok(())
 }
 
-pub async fn get_master_seed() -> Result<Option<EncryptionPacket>, Error> {
+async fn get_master_seed() -> Result<Option<EncryptionPacket>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
         .with_mode(TransactionMode::Readonly)
-        .build()?;
-    let store = tx.object_store(MASTER_KEY_STORE)?;
+        .build()
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    let store = tx
+        .object_store(MASTER_KEY_STORE)
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
 
-    if let Some(js_value) = store.get(MASTER_KEY).await? {
+    if let Some(js_value) = store
+        .get(MASTER_KEY)
+        .await
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))? {
         let encryption_packet: EncryptionPacket = serde_wasm_bindgen::from_value(js_value)
-            .map_err(|e| Error::from(JsValue::from_str(&e.to_string())))?;
+            .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
         Ok(Some(encryption_packet))
     } else {
         Ok(None)
     }
 }
 
-pub async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), Error> {
+async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readwrite)
-        .build()?;
-    let store = tx.object_store(CHILD_KEYS_STORE)?;
+        .build()
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    let store = tx
+        .object_store(CHILD_KEYS_STORE)
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
 
     let js_value = serde_wasm_bindgen::to_value(&child_key)
-        .map_err(|e| Error::from(JsValue::from_str(&e.to_string())))?;
+        .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
 
     match store
         .add(js_value)
@@ -131,98 +135,129 @@ pub async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), Error> {
         .build()
     {
         Ok(_) => {
-            tx.commit().await?;
+            tx.commit().await.map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
             Ok(())
         }
         Err(e) => {
-            if let Error::DomException(dom_err) = e {
-                if dom_err.name() == "ConstraintError" {
-                    // Key exists, ignore per requirement
+            if let DBError::DomException(dom_err) = e {
+                if dom_err.name() == "ConstraintError" { //TODO check
                     Ok(())
                 } else {
-                    Err(Error::DomException(dom_err))
+                    Err(QuantumPurseError::DatabaseError(dom_err.to_string()))
                 }
             } else {
-                Err(e)
+                Err(QuantumPurseError::DatabaseError(e.to_string()))
             }
         }
     }
 }
 
-pub async fn get_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, Error> {
+pub async fn get_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readonly)
-        .build()?;
-    let store = tx.object_store(CHILD_KEYS_STORE)?;
+        .build()
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    let store = tx
+        .object_store(CHILD_KEYS_STORE)
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
 
-    if let Some(js_value) = store.get(pub_key).await? {
+    if let Some(js_value) = store
+        .get(pub_key)
+        .await
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))? {
         let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)
-            .map_err(|e| Error::from(JsValue::from_str(&e.to_string())))?;
+            .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
         Ok(Some(child_key))
     } else {
         Ok(None)
     }
 }
 
-pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, Error> {
+pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readonly)
-        .build()?;
-    let store = tx.object_store(CHILD_KEYS_STORE)?;
+        .build()
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    let store = tx
+        .object_store(CHILD_KEYS_STORE)
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
 
-    let iter = store.get_all().await?;
+    let iter = store
+        .get_all()
+        .await
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
     let mut child_keys = Vec::new();
     for result in iter {
-        let js_value = result?;
+        let js_value = result.map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
         let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)
-            .map_err(|e| Error::from(JsValue::from_str(&e.to_string())))?;
+            .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
         child_keys.push(child_key);
     }
     Ok(child_keys)
 }
 
 // Helper function to clear a specific object store
-async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), JsValue> {
+async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), QuantumPurseError> {
     let tx = db
         .transaction(store_name)
         .with_mode(TransactionMode::Readwrite)
         .build()
-        .map_err(|e| JsValue::from_str(&format!("Error starting transaction for {}: {}", store_name, e)))?;
+        .map_err(|e| {
+            QuantumPurseError::DatabaseError(format!(
+                "Error starting transaction for {}: {}",
+                store_name, e
+            ))
+        })?;
     let store = tx
         .object_store(store_name)
-        .map_err(|e| JsValue::from_str(&format!("Error getting {}: {}", store_name, e)))?;
+        .map_err(|e| {
+            QuantumPurseError::DatabaseError(format!(
+                "Error getting object store {}: {}",
+                store_name, e
+            ))
+        })?;
     store
         .clear()
-        .map_err(|e| JsValue::from_str(&format!("Error clearing {}: {}", store_name, e)))?;
-    tx.commit()
-        .await
-        .map_err(|e| JsValue::from_str(&format!("Error committing transaction for {}: {}", store_name, e)))?;
+        .map_err(|e| {
+            QuantumPurseError::DatabaseError(format!(
+                "Error clearing object store {}: {}",
+                store_name, e
+            ))
+        })?;
+    tx.commit().await.map_err(|e| {
+        QuantumPurseError::DatabaseError(format!(
+            "Error committing transaction for {}: {}",
+            store_name, e
+        ))
+    })?;
     Ok(())
 }
 
 // Public function to clear the database
 #[wasm_bindgen]
 pub async fn clear_database() -> Result<(), JsValue> {
-    let db = open_db().await.map_err(|e| JsValue::from_str(&format!("Error opening database: {}", e)))?;
-    clear_object_store(&db, MASTER_KEY_STORE).await?;
-    clear_object_store(&db, CHILD_KEYS_STORE).await?;
+    let db = open_db()
+        .await
+        .map_err(|e| e.to_jsvalue())?;
+    clear_object_store(&db, MASTER_KEY_STORE).await.map_err(|e| e.to_jsvalue())?;
+    clear_object_store(&db, CHILD_KEYS_STORE).await.map_err(|e| e.to_jsvalue())?;
     Ok(())
 }
 
 // TODO private function
 // TODO check random source in javascript side!
-pub fn get_random_bytes(length: usize) -> Result<Vec<u8>, String> {
+fn get_random_bytes(length: usize) -> Result<Vec<u8>, String> {
     let mut buffer = vec![0u8; length];
     getrandom(buffer.as_mut_slice()).map_err(|e| e.to_string())?;
     Ok(buffer)
 }
 
-/// Generate bip39 seed phrase and encrypt it
-pub fn gen_seed_phrase() -> Mnemonic {
+/// Generate bip39 seed phrase
+fn gen_seed_phrase() -> Mnemonic {
     let mut entropy = get_random_bytes(32).unwrap(); // 256-bit entropy
     let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
     entropy.zeroize();
@@ -241,13 +276,12 @@ pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
     password.zeroize();
     set_master_seed(encrypted_seed)
         .await
-        .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
-
+        .map_err(|e| e.to_jsvalue())?;
     Ok(())
 }
 
 /// Encrypts data using AES-GCM with a password-derived key.
-pub fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String> {
+fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String> {
     // Generate random salt and IV
     let mut salt = vec![0u8; SALT_LENGTH];
     let mut iv = vec![0u8; IV_LENGTH];
@@ -280,7 +314,7 @@ pub fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String
 }
 
 /// Decrypts data using AES-GCM with a password-derived key.
-pub fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String> {
+fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String> {
     // Decode hex strings to bytes
     let salt = decode(packet.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
     let iv = decode(packet.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
@@ -313,36 +347,27 @@ pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
     let password = password.to_vec();
     let mut password_clone = password.clone();
 
-    // Helper to convert IndexedDB errors to JsValue
-    fn db_error_to_jsvalue(e: Error) -> JsValue {
-        JsValue::from_str(&format!("Database error: {}", e))
-    }
-
     let master_seed = get_master_seed()
         .await
-        .map_err(db_error_to_jsvalue)?
+        .map_err(|e| e.to_jsvalue())?
         .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
     let mut seed = decrypt(&password, master_seed)?.to_vec();
 
-    // Derive SPHINCS+ seed using path
-    let child_keys = get_child_keys().await.map_err(db_error_to_jsvalue)?;
+    let child_keys = get_child_keys().await.map_err(|e| e.to_jsvalue())?;
     let child_index = child_keys.len();
     let path = format!("pq/ckb/{}", child_index);
     let mut sphincs_seed = vec![0u8; 32];
     let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO check perf/security tradeoffs
     scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
         .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
+
     let mut rng = rand_chacha::ChaCha8Rng::from_seed(
         sphincs_seed
             .try_into()
             .expect("slice with incorrect length"),
     );
-
-    // Generate SPHINCS+ key pair
     let (pub_key, pri_key) = slh_dsa_shake_128f::try_keygen_with_rng(&mut rng)?;
     let mut pri_key_bytes = pri_key.into_bytes();
-
-    // Encrypt private key
     let encrypted_pri = encrypt(&password_clone, &pri_key_bytes)?;
 
     let child_key = SphincsPlusSigner {
@@ -350,12 +375,9 @@ pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
         sphincs_plus_pri_enc: encrypted_pri,
     };
 
-    set_child_key(child_key)
-        .await
-        .map_err(db_error_to_jsvalue)?;
+    set_child_key(child_key).await.map_err(|e| e.to_jsvalue())?;
 
     seed.zeroize();
-    // sphincs_seed.zeroize();
     password_clone.zeroize();
     pri_key_bytes.zeroize();
 
