@@ -19,7 +19,8 @@ use fips205::traits::{SerDes, Signer};
 use getrandom::getrandom;
 use hex::{decode, encode};
 use indexed_db_futures::{
-    database::Database, error::Error as DBError, prelude::*, transaction::TransactionMode,
+    database::Database, error::Error as DBError, iter::ArrayMapIter, prelude::*,
+    transaction::TransactionMode,
 };
 use rand_chacha::rand_core::SeedableRng;
 use scrypt::{scrypt, Params};
@@ -55,13 +56,13 @@ pub struct EncryptionPacket {
 /// Represents a SPHINCS+ key pair with the public key and an encrypted private key.
 ///
 /// **Fields**:
-/// - `sphincs_plus_pub_key: String` - Hex-encoded SPHINCS+ public key.
-/// - `sphincs_plus_pri_enc: EncryptionPacket` - Encrypted SPHINCS+ private key, stored as an `EncryptionPacket`.
+/// - `pub_key: String` - Hex-encoded SPHINCS+ public key.
+/// - `pri_enc: EncryptionPacket` - Encrypted SPHINCS+ private key, stored as an `EncryptionPacket`.
 #[wasm_bindgen]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SphincsPlusSigner {
-    sphincs_plus_pub_key: String,
-    sphincs_plus_pri_enc: EncryptionPacket,
+    pub_key: String,
+    pri_enc: EncryptionPacket,
 }
 
 /// Main struct for managing authentication keys in WebAssembly.
@@ -74,7 +75,7 @@ const IV_LENGTH: usize = 12; // 96-bit IV for AES-GCM
 const DB_NAME: &str = "quantum_purse_db";
 const MASTER_KEY_STORE: &str = "master_key_store";
 const CHILD_KEYS_STORE: &str = "child_keys_store";
-const MASTER_KEY: &str = "master_key";
+const MASTER_KEY: &str = "master_key_entry";
 
 /// Opens the IndexedDB database, creating object stores if necessary.
 ///
@@ -108,9 +109,11 @@ async fn open_db() -> Result<Database, QuantumPurseError> {
 /// - `Result<(), QuantumPurseError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-/// 
+///
 /// **Warning**: This method overwrite the existing master seed in db.
-async fn set_encrypted_master_seed(encryption_packet: EncryptionPacket) -> Result<(), QuantumPurseError> {
+async fn set_encrypted_master_seed(
+    encryption_packet: EncryptionPacket,
+) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -154,13 +157,13 @@ async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, Quantum
 /// Stores a child key (SPHINCS+ signer) in the database.
 ///
 /// **Parameters**:
-/// - `child_key: SphincsPlusSigner` - The SPHINCS+ key pair to store.
+/// - `signer: SphincsPlusSigner` - The SPHINCS+ key pair to store.
 ///
 /// **Returns**:
 /// - `Result<(), QuantumPurseError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn add_encrypted_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseError> {
+async fn add_signer(signer: SphincsPlusSigner) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -168,11 +171,11 @@ async fn add_encrypted_child_key(child_key: SphincsPlusSigner) -> Result<(), Qua
         .build()?;
     let store = tx.object_store(CHILD_KEYS_STORE)?;
 
-    let js_value = serde_wasm_bindgen::to_value(&child_key)?;
+    let js_value = serde_wasm_bindgen::to_value(&signer)?;
 
     match store
         .add(js_value)
-        .with_key(child_key.sphincs_plus_pub_key)
+        .with_key(signer.pub_key)
         .build()
     {
         Ok(_) => {
@@ -203,7 +206,9 @@ async fn add_encrypted_child_key(child_key: SphincsPlusSigner) -> Result<(), Qua
 /// - `Result<Option<SphincsPlusSigner>, QuantumPurseError>` - The child key if found, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-pub async fn get_encrypted_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, QuantumPurseError> {
+pub async fn get_signer(
+    pub_key: &str,
+) -> Result<Option<SphincsPlusSigner>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -221,30 +226,6 @@ pub async fn get_encrypted_child_key(pub_key: &str) -> Result<Option<SphincsPlus
     } else {
         Ok(None)
     }
-}
-
-/// Retrieves all child keys from the database.
-///
-/// **Returns**:
-/// - `Result<Vec<SphincsPlusSigner>, QuantumPurseError>` - A vector of all stored child keys, or an error if retrieval fails.
-///
-/// **Async**: Yes
-pub async fn get_encrypted_child_keys() -> Result<Vec<SphincsPlusSigner>, QuantumPurseError> {
-    let db = open_db().await?;
-    let tx = db
-        .transaction(CHILD_KEYS_STORE)
-        .with_mode(TransactionMode::Readonly)
-        .build()?;
-    let store = tx.object_store(CHILD_KEYS_STORE)?;
-
-    let iter = store.get_all().await?;
-    let mut child_keys = Vec::new();
-    for result in iter {
-        let js_value = result?;
-        let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)?;
-        child_keys.push(child_key);
-    }
-    Ok(child_keys)
 }
 
 /// Clears a specific object store in the database.
@@ -382,7 +363,7 @@ fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String>
 
 #[wasm_bindgen]
 impl AuthKeyRetriever {
-    /// Constructs a new `AuthKeyRetriever`.
+    /// Constructs a new `AuthKeyRetriever`. Stateless and serve as a namespace only.
     ///
     /// **Returns**:
     /// - `AuthKeyRetriever` - A new instance of the struct.
@@ -410,6 +391,35 @@ impl AuthKeyRetriever {
         Ok(())
     }
 
+    /// Retrieves all SPHINCS+ public keys from the database.
+    ///
+    /// Returns:
+    /// - A vector of hex-encoded sphincs+ public keys, or an error if retrieval fails.
+    #[wasm_bindgen]
+    pub async fn get_all_signer_pub() -> Result<Vec<String>, JsValue> {
+        /// Error conversion helper
+        fn map_db_error<T>(result: Result<T, DBError>) -> Result<T, JsValue> {
+            result.map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))
+        }
+
+        let db = open_db().await.map_err(|e| e.to_jsvalue())?;
+        let tx = map_db_error(
+            db.transaction(CHILD_KEYS_STORE)
+                .with_mode(TransactionMode::Readonly)
+                .build(),
+        )?;
+        let store = map_db_error(tx.object_store(CHILD_KEYS_STORE))?;
+
+        let iter: ArrayMapIter<JsValue> = map_db_error(store.get_all_keys().await)?;
+        let mut pub_keys = Vec::new();
+        for result in iter {
+            let js_value = map_db_error(result)?;
+            pub_keys.push(js_value.as_string().unwrap());
+        }
+
+        Ok(pub_keys)
+    }
+
     /// Initializes the master seed by generating a BIP39 mnemonic, deriving the seed,
     /// encrypting it with the provided password, and storing it in IndexedDB.
     ///
@@ -421,15 +431,17 @@ impl AuthKeyRetriever {
     ///   or rejects with a JavaScript error on failure.
     ///
     /// **Async**: Yes
-    /// 
+    ///
     /// **Note** Only run this when master seed is empty because set_encrypted_master_seed overwrites old seed.
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
-        let stored_seed= get_encrypted_master_seed()
+        let stored_seed = get_encrypted_master_seed()
             .await
             .map_err(|e| e.to_jsvalue())?;
         if stored_seed.is_some() {
-            Err(JsValue::from_str("Init key failed: Master seed already exists"))
+            Err(JsValue::from_str(
+                "Init key failed: Master seed already exists",
+            ))
         } else {
             let mnemonic = gen_seed_phrase();
             let mut seed = mnemonic.to_seed("");
@@ -457,7 +469,7 @@ impl AuthKeyRetriever {
     ///
     /// **Async**: Yes
     #[wasm_bindgen]
-    pub async fn gen_child_key(password: Uint8Array) -> Result<(), JsValue> {
+    pub async fn gen_signer(password: Uint8Array) -> Result<(), JsValue> {
         let password = password.to_vec();
         let mut password_clone = password.clone();
 
@@ -467,7 +479,7 @@ impl AuthKeyRetriever {
             .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
         let mut seed = decrypt(&password, master_seed)?.to_vec();
 
-        let child_keys = get_encrypted_child_keys().await.map_err(|e| e.to_jsvalue())?;
+        let child_keys = Self::get_all_signer_pub().await?;
         let child_index = child_keys.len();
         let path = format!("pq/ckb/{}", child_index);
         let mut sphincs_seed = vec![0u8; 32];
@@ -478,18 +490,20 @@ impl AuthKeyRetriever {
         let mut rng = rand_chacha::ChaCha8Rng::from_seed(
             sphincs_seed
                 .try_into()
-                .expect("slice with incorrect length"),
+                .expect("Slice with incorrect length"),
         );
         let (pub_key, pri_key) = slh_dsa_shake_128f::try_keygen_with_rng(&mut rng)?;
         let mut pri_key_bytes = pri_key.into_bytes();
         let encrypted_pri = encrypt(&password_clone, &pri_key_bytes)?;
 
         let child_key = SphincsPlusSigner {
-            sphincs_plus_pub_key: encode(pub_key.into_bytes()),
-            sphincs_plus_pri_enc: encrypted_pri,
+            pub_key: encode(pub_key.into_bytes()),
+            pri_enc: encrypted_pri,
         };
 
-        add_encrypted_child_key(child_key).await.map_err(|e| e.to_jsvalue())?;
+        add_signer(child_key)
+            .await
+            .map_err(|e| e.to_jsvalue())?;
 
         seed.zeroize();
         password_clone.zeroize();
@@ -501,7 +515,7 @@ impl AuthKeyRetriever {
     /// Imports a seed phrase by encrypting it with the provided password and storing it as the master seed.
     ///
     /// **Parameters**:
-    /// - `seed_phrase: Uint8Array` - The seed phrase to import.
+    /// - `seed_phrase: Uint8Array` - The seed phrase utf8-encoded as Uint8Array to import.
     /// - `password: Uint8Array` - The password used to encrypt the seed phrase.
     ///
     /// **Returns**:
@@ -512,7 +526,7 @@ impl AuthKeyRetriever {
     ///
     /// **Warning**: This method is not recommended as it may expose the seed phrase in JavaScript.
     #[wasm_bindgen]
-    pub async fn import_seed_phrase(
+    pub async fn import_seed(
         seed_phrase: Uint8Array,
         password: Uint8Array,
     ) -> Result<(), JsValue> {
@@ -523,7 +537,7 @@ impl AuthKeyRetriever {
         seed_phrase.zeroize();
         set_encrypted_master_seed(encrypted_seed)
             .await
-            .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
+            .map_err(|e| e.to_jsvalue())?;
         Ok(())
     }
 
@@ -538,11 +552,11 @@ impl AuthKeyRetriever {
     ///
     /// **Async**: Yes
     #[wasm_bindgen]
-    pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
+    pub async fn export_seed(password: Uint8Array) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
         let encrypted_seed = get_encrypted_master_seed()
             .await
-            .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?
+            .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
         password.zeroize();
         let seed = decrypt(&password, encrypted_seed)?;
@@ -553,7 +567,7 @@ impl AuthKeyRetriever {
     ///
     /// **Parameters**:
     /// - `password: Uint8Array` - The password used to decrypt the private key.
-    /// - `signer: SphincsPlusSigner` - The signer containing the encrypted private key.
+    /// - `sphincsp_pub: SphincsPlusSigner` - The signer containing the encrypted private key.
     /// - `message: Uint8Array` - The message to be signed.
     ///
     /// **Returns**:
@@ -562,13 +576,18 @@ impl AuthKeyRetriever {
     ///
     /// **Async**: No
     #[wasm_bindgen]
-    pub fn sign(
+    pub async fn sign(
         password: Uint8Array,
-        signer: SphincsPlusSigner,
+        sphincsp_pub: String,
         message: Uint8Array,
     ) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
-        let pri_key_bytes = decrypt(&password, signer.sphincs_plus_pri_enc)?.to_vec();
+        let child_key = get_signer(&sphincsp_pub)
+            .await
+            .map_err(|e| e.to_jsvalue())?
+            .unwrap();
+
+        let pri_key_bytes = decrypt(&password, child_key.pri_enc)?.to_vec();
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
             &pri_key_bytes.try_into().expect("Fail to parse private key"),
         )
