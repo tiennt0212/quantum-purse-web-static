@@ -1,3 +1,5 @@
+use indexed_db_futures::error::Error as DBError;
+use serde_wasm_bindgen::Error as SerdeError;
 use std::fmt;
 
 #[derive(Debug)]
@@ -15,9 +17,20 @@ impl fmt::Display for QuantumPurseError {
     }
 }
 
-// Optional: Add a helper method to convert to JsValue for WASM
 impl QuantumPurseError {
     pub fn to_jsvalue(&self) -> wasm_bindgen::JsValue {
         wasm_bindgen::JsValue::from_str(&self.to_string())
+    }
+}
+
+impl From<DBError> for QuantumPurseError {
+    fn from(e: DBError) -> Self {
+        QuantumPurseError::DatabaseError(e.to_string())
+    }
+}
+
+impl From<SerdeError> for QuantumPurseError {
+    fn from(e: SerdeError) -> Self {
+        QuantumPurseError::SerializationError(e.to_string())
     }
 }

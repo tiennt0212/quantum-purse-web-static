@@ -72,23 +72,13 @@ async fn set_master_seed(encryption_packet: EncryptionPacket) -> Result<(), Quan
     let tx = db
         .transaction(MASTER_KEY_STORE)
         .with_mode(TransactionMode::Readwrite)
-        .build()
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
-    let store = tx
-        .object_store(MASTER_KEY_STORE)
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+        .build()?;
+    let store = tx.object_store(MASTER_KEY_STORE)?;
 
-    let js_value = serde_wasm_bindgen::to_value(&encryption_packet)
-        .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
+    let js_value = serde_wasm_bindgen::to_value(&encryption_packet)?;
 
-    store
-        .put(&js_value)
-        .with_key(MASTER_KEY)
-        .await
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
-    tx.commit()
-        .await
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    store.put(&js_value).with_key(MASTER_KEY).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -97,18 +87,15 @@ async fn get_master_seed() -> Result<Option<EncryptionPacket>, QuantumPurseError
     let tx = db
         .transaction(MASTER_KEY_STORE)
         .with_mode(TransactionMode::Readonly)
-        .build()
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
-    let store = tx
-        .object_store(MASTER_KEY_STORE)
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+        .build()?;
+    let store = tx.object_store(MASTER_KEY_STORE)?;
 
     if let Some(js_value) = store
         .get(MASTER_KEY)
         .await
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))? {
-        let encryption_packet: EncryptionPacket = serde_wasm_bindgen::from_value(js_value)
-            .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?
+    {
+        let encryption_packet: EncryptionPacket = serde_wasm_bindgen::from_value(js_value)?;
         Ok(Some(encryption_packet))
     } else {
         Ok(None)
@@ -120,14 +107,10 @@ async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseE
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readwrite)
-        .build()
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
-    let store = tx
-        .object_store(CHILD_KEYS_STORE)
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+        .build()?;
+    let store = tx.object_store(CHILD_KEYS_STORE)?;
 
-    let js_value = serde_wasm_bindgen::to_value(&child_key)
-        .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
+    let js_value = serde_wasm_bindgen::to_value(&child_key)?;
 
     match store
         .add(js_value)
@@ -135,12 +118,13 @@ async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseE
         .build()
     {
         Ok(_) => {
-            tx.commit().await.map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+            tx.commit().await?;
             Ok(())
         }
         Err(e) => {
             if let DBError::DomException(dom_err) = e {
-                if dom_err.name() == "ConstraintError" { //TODO check
+                if dom_err.name() == "ConstraintError" {
+                    //TODO check
                     Ok(())
                 } else {
                     Err(QuantumPurseError::DatabaseError(dom_err.to_string()))
@@ -157,18 +141,15 @@ pub async fn get_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, Q
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readonly)
-        .build()
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
-    let store = tx
-        .object_store(CHILD_KEYS_STORE)
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+        .build()?;
+    let store = tx.object_store(CHILD_KEYS_STORE)?;
 
     if let Some(js_value) = store
         .get(pub_key)
         .await
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))? {
-        let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)
-            .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
+        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?
+    {
+        let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)?;
         Ok(Some(child_key))
     } else {
         Ok(None)
@@ -180,21 +161,14 @@ pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, QuantumPurseErro
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readonly)
-        .build()
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
-    let store = tx
-        .object_store(CHILD_KEYS_STORE)
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+        .build()?;
+    let store = tx.object_store(CHILD_KEYS_STORE)?;
 
-    let iter = store
-        .get_all()
-        .await
-        .map_err(|e| QuantumPurseError::DatabaseError(e.to_string()))?;
+    let iter = store.get_all().await?;
     let mut child_keys = Vec::new();
     for result in iter {
-        let js_value = result.map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
-        let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)
-            .map_err(|e| QuantumPurseError::SerializationError(e.to_string()))?;
+        let js_value = result?;
+        let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)?;
         child_keys.push(child_key);
     }
     Ok(child_keys)
@@ -212,22 +186,18 @@ async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), Quant
                 store_name, e
             ))
         })?;
-    let store = tx
-        .object_store(store_name)
-        .map_err(|e| {
-            QuantumPurseError::DatabaseError(format!(
-                "Error getting object store {}: {}",
-                store_name, e
-            ))
-        })?;
-    store
-        .clear()
-        .map_err(|e| {
-            QuantumPurseError::DatabaseError(format!(
-                "Error clearing object store {}: {}",
-                store_name, e
-            ))
-        })?;
+    let store = tx.object_store(store_name).map_err(|e| {
+        QuantumPurseError::DatabaseError(format!(
+            "Error getting object store {}: {}",
+            store_name, e
+        ))
+    })?;
+    store.clear().map_err(|e| {
+        QuantumPurseError::DatabaseError(format!(
+            "Error clearing object store {}: {}",
+            store_name, e
+        ))
+    })?;
     tx.commit().await.map_err(|e| {
         QuantumPurseError::DatabaseError(format!(
             "Error committing transaction for {}: {}",
@@ -240,11 +210,13 @@ async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), Quant
 // Public function to clear the database
 #[wasm_bindgen]
 pub async fn clear_database() -> Result<(), JsValue> {
-    let db = open_db()
+    let db = open_db().await.map_err(|e| e.to_jsvalue())?;
+    clear_object_store(&db, MASTER_KEY_STORE)
         .await
         .map_err(|e| e.to_jsvalue())?;
-    clear_object_store(&db, MASTER_KEY_STORE).await.map_err(|e| e.to_jsvalue())?;
-    clear_object_store(&db, CHILD_KEYS_STORE).await.map_err(|e| e.to_jsvalue())?;
+    clear_object_store(&db, CHILD_KEYS_STORE)
+        .await
+        .map_err(|e| e.to_jsvalue())?;
     Ok(())
 }
 
