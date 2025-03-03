@@ -66,6 +66,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "auth-key-retriever"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "bip39",
+ "fips205",
+ "getrandom",
+ "hex",
+ "indexed_db_futures",
+ "rand_chacha",
+ "scrypt",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "zeroize",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.74"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -381,26 +401,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecc2af9a1119c51f12a14607e783cb977bde58bc069ff0c3da1095e635d70654"
 dependencies = [
  "cpufeatures",
-]
-
-[[package]]
-name = "key-manager"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "bip39",
- "fips205",
- "getrandom",
- "hex",
- "indexed_db_futures",
- "rand_chacha",
- "scrypt",
- "serde",
- "serde-wasm-bindgen",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "zeroize",
 ]
 
 [[package]]

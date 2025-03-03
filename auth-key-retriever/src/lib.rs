@@ -1,9 +1,9 @@
 //! # QuantumPurse AuthKeyRetriever
 //!
-//! This module provides a secure interface for managing cryptographic keys in a web environment
-//! using WebAssembly. It leverages the SPHINCS+ signature scheme for post-quantum security,
-//! AES-GCM for encryption, and Scrypt for key derivation. Sensitive data is encrypted and stored
-//! persistently in the browser via IndexedDB.
+//! This module provides a secure authentication interface for managing cryptographic keys in
+//! QuantumPurse using WebAssembly. It leverages the SPHINCS+ signature scheme for post-quantum
+//! security, AES-GCM for encryption, and Scrypt for key derivation. Sensitive data is encrypted and
+//! stored persistently in the browser via IndexedDB.
 //!
 //! The module supports generating a BIP39 mnemonic seed phrase, deriving a master seed,
 //! generating SPHINCS+ child key pairs, and signing messages, all secured with user-provided passwords.
@@ -107,6 +107,8 @@ async fn open_db() -> Result<Database, QuantumPurseError> {
 /// - `Result<(), QuantumPurseError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
+/// 
+/// **Warning**: This method overwrite the existing master seed in db.
 async fn set_master_seed(encryption_packet: EncryptionPacket) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
@@ -418,6 +420,8 @@ impl AuthKeyRetriever {
     ///   or rejects with a JavaScript error on failure.
     ///
     /// **Async**: Yes
+    /// 
+    /// **Note** This function will only run when master seed in db is empty
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
         let mnemonic = gen_seed_phrase();
@@ -434,7 +438,7 @@ impl AuthKeyRetriever {
     }
 
     /// Generates a new SPHINCS+ child key pair derived from the master seed,
-    /// encrypts the private key with the password, and stores it in IndexedDB.
+    /// encrypts the private key with the password, and stores/appends it in IndexedDB.
     ///
     /// **Parameters**:
     /// - `password: Uint8Array` - The password used to decrypt the master seed and encrypt the child private key.
