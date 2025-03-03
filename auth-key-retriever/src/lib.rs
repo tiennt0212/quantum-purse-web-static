@@ -1,12 +1,13 @@
 //! # QuantumPurse AuthKeyRetriever
 //!
 //! This module provides a secure authentication interface for managing cryptographic keys in
-//! QuantumPurse using WebAssembly. It leverages the SPHINCS+ signature scheme for post-quantum
-//! security, AES-GCM for encryption, and Scrypt for key derivation. Sensitive data is encrypted and
-//! stored persistently in the browser via IndexedDB.
+//! QuantumPurse using WebAssembly. It leverages AES-GCM for encryption, Scrypt for key derivation and
+//! the SPHINCS+ signature scheme for post-quantum QuantumPurse transaction signing. Sensitive data is
+//! by default encrypted and stored in the browser via IndexedDB with key gen & signing authenticated
+//! by user-provided passwords.
 //!
 //! The module supports generating a BIP39 mnemonic seed phrase, deriving a master seed,
-//! generating SPHINCS+ child key pairs, and signing messages, all secured with user-provided passwords.
+//! generating SPHINCS+ child key pairs, and signing SPHINCS+ messages.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -421,20 +422,27 @@ impl AuthKeyRetriever {
     ///
     /// **Async**: Yes
     /// 
-    /// **Note** This function will only run when master seed in db is empty
+    /// **Note** Only run this when master seed is empty because set_encrypted_master_seed overwrites old seed.
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
-        let mnemonic = gen_seed_phrase();
-        let mut seed = mnemonic.to_seed("");
-        let mut password = password.to_vec();
-        let encrypted_seed = encrypt(&password, &seed)
-            .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
-        seed.zeroize();
-        password.zeroize();
-        set_encrypted_master_seed(encrypted_seed)
+        let stored_seed= get_encrypted_master_seed()
             .await
             .map_err(|e| e.to_jsvalue())?;
-        Ok(())
+        if stored_seed.is_some() {
+            Err(JsValue::from_str("Init key failed: Master seed already exists"))
+        } else {
+            let mnemonic = gen_seed_phrase();
+            let mut seed = mnemonic.to_seed("");
+            let mut password = password.to_vec();
+            let encrypted_seed = encrypt(&password, &seed)
+                .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
+            seed.zeroize();
+            password.zeroize();
+            set_encrypted_master_seed(encrypted_seed)
+                .await
+                .map_err(|e| e.to_jsvalue())?;
+            Ok(())
+        }
     }
 
     /// Generates a new SPHINCS+ child key pair derived from the master seed,
