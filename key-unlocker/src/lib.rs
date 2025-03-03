@@ -31,7 +31,7 @@ use web_sys::js_sys::Uint8Array;
 use zeroize::Zeroize;
 
 mod errors;
-use crate::errors::KeyUnlocker;
+use crate::errors::KeyUnlockerError;
 
 #[macro_export]
 macro_rules! debug {
@@ -83,7 +83,7 @@ const MASTER_KEY: &str = "master_key_entry";
 /// - `Result<Database, KeyUnlocker>` - The opened database on success, or an error if the operation fails.
 ///
 /// **Async**: Yes
-async fn open_db() -> Result<Database, KeyUnlocker> {
+async fn open_db() -> Result<Database, KeyUnlockerError> {
     Database::open(DB_NAME)
         .with_version(1u8)
         .with_on_blocked(|_event| Ok(()))
@@ -97,7 +97,7 @@ async fn open_db() -> Result<Database, KeyUnlocker> {
             Ok(())
         })
         .await
-        .map_err(|e| KeyUnlocker::DatabaseError(format!("Failed to open IndexedDB: {}", e)))
+        .map_err(|e| KeyUnlockerError::DatabaseError(format!("Failed to open IndexedDB: {}", e)))
 }
 
 /// Stores the encrypted master seed in the database.
@@ -113,7 +113,7 @@ async fn open_db() -> Result<Database, KeyUnlocker> {
 /// **Warning**: This method overwrite the existing master seed in db.
 async fn set_encrypted_master_seed(
     encryption_packet: EncryptionPacket,
-) -> Result<(), KeyUnlocker> {
+) -> Result<(), KeyUnlockerError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -134,7 +134,7 @@ async fn set_encrypted_master_seed(
 /// - `Result<Option<EncryptionPacket>, KeyUnlocker>` - The encrypted master seed if it exists, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlocker> {
+async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlockerError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -145,7 +145,7 @@ async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlo
     if let Some(js_value) = store
         .get(MASTER_KEY)
         .await
-        .map_err(|e| KeyUnlocker::DatabaseError(e.to_string()))?
+        .map_err(|e| KeyUnlockerError::DatabaseError(e.to_string()))?
     {
         let encryption_packet: EncryptionPacket = serde_wasm_bindgen::from_value(js_value)?;
         Ok(Some(encryption_packet))
@@ -163,7 +163,7 @@ async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlo
 /// - `Result<(), KeyUnlocker>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlocker> {
+async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlockerError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -188,10 +188,10 @@ async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlocker> {
                     // Key already exists, skip
                     Ok(())
                 } else {
-                    Err(KeyUnlocker::DatabaseError(dom_err.to_string()))
+                    Err(KeyUnlockerError::DatabaseError(dom_err.to_string()))
                 }
             } else {
-                Err(KeyUnlocker::DatabaseError(e.to_string()))
+                Err(KeyUnlockerError::DatabaseError(e.to_string()))
             }
         }
     }
@@ -208,7 +208,7 @@ async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlocker> {
 /// **Async**: Yes
 pub async fn get_signer(
     pub_key: &str,
-) -> Result<Option<SphincsPlusSigner>, KeyUnlocker> {
+) -> Result<Option<SphincsPlusSigner>, KeyUnlockerError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -219,7 +219,7 @@ pub async fn get_signer(
     if let Some(js_value) = store
         .get(pub_key)
         .await
-        .map_err(|e| KeyUnlocker::DatabaseError(e.to_string()))?
+        .map_err(|e| KeyUnlockerError::DatabaseError(e.to_string()))?
     {
         let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)?;
         Ok(Some(child_key))
@@ -238,31 +238,31 @@ pub async fn get_signer(
 /// - `Result<(), KeyUnlocker>` - Ok on success, or an error if the operation fails.
 ///
 /// **Async**: Yes
-async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyUnlocker> {
+async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyUnlockerError> {
     let tx = db
         .transaction(store_name)
         .with_mode(TransactionMode::Readwrite)
         .build()
         .map_err(|e| {
-            KeyUnlocker::DatabaseError(format!(
+            KeyUnlockerError::DatabaseError(format!(
                 "Error starting transaction for {}: {}",
                 store_name, e
             ))
         })?;
     let store = tx.object_store(store_name).map_err(|e| {
-        KeyUnlocker::DatabaseError(format!(
+        KeyUnlockerError::DatabaseError(format!(
             "Error getting object store {}: {}",
             store_name, e
         ))
     })?;
     store.clear().map_err(|e| {
-        KeyUnlocker::DatabaseError(format!(
+        KeyUnlockerError::DatabaseError(format!(
             "Error clearing object store {}: {}",
             store_name, e
         ))
     })?;
     tx.commit().await.map_err(|e| {
-        KeyUnlocker::DatabaseError(format!(
+        KeyUnlockerError::DatabaseError(format!(
             "Error committing transaction for {}: {}",
             store_name, e
         ))

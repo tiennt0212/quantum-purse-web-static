@@ -3,34 +3,34 @@ use serde_wasm_bindgen::Error as SerdeError;
 use std::fmt;
 
 #[derive(Debug)]
-pub enum KeyUnlocker {
+pub enum KeyUnlockerError {
     SerializationError(String),
     DatabaseError(String),
 }
 
-impl fmt::Display for KeyUnlocker {
+impl fmt::Display for KeyUnlockerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            KeyUnlocker::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
-            KeyUnlocker::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            KeyUnlockerError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+            KeyUnlockerError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
         }
     }
 }
 
-impl KeyUnlocker {
+impl KeyUnlockerError {
     pub fn to_jsvalue(&self) -> wasm_bindgen::JsValue {
         wasm_bindgen::JsValue::from_str(&self.to_string())
     }
 }
 
-impl From<DBError> for KeyUnlocker {
+impl From<DBError> for KeyUnlockerError {
     fn from(e: DBError) -> Self {
-        KeyUnlocker::DatabaseError(e.to_string())
+        KeyUnlockerError::DatabaseError(e.to_string())
     }
 }
 
-impl From<SerdeError> for KeyUnlocker {
+impl From<SerdeError> for KeyUnlockerError {
     fn from(e: SerdeError) -> Self {
-        KeyUnlocker::SerializationError(e.to_string())
+        KeyUnlockerError::SerializationError(e.to_string())
     }
 }
