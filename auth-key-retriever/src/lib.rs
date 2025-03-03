@@ -109,7 +109,7 @@ async fn open_db() -> Result<Database, QuantumPurseError> {
 /// **Async**: Yes
 /// 
 /// **Warning**: This method overwrite the existing master seed in db.
-async fn set_master_seed(encryption_packet: EncryptionPacket) -> Result<(), QuantumPurseError> {
+async fn set_encrypted_master_seed(encryption_packet: EncryptionPacket) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -130,7 +130,7 @@ async fn set_master_seed(encryption_packet: EncryptionPacket) -> Result<(), Quan
 /// - `Result<Option<EncryptionPacket>, QuantumPurseError>` - The encrypted master seed if it exists, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-async fn get_master_seed() -> Result<Option<EncryptionPacket>, QuantumPurseError> {
+async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -159,7 +159,7 @@ async fn get_master_seed() -> Result<Option<EncryptionPacket>, QuantumPurseError
 /// - `Result<(), QuantumPurseError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseError> {
+async fn add_encrypted_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -202,7 +202,7 @@ async fn set_child_key(child_key: SphincsPlusSigner) -> Result<(), QuantumPurseE
 /// - `Result<Option<SphincsPlusSigner>, QuantumPurseError>` - The child key if found, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-pub async fn get_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, QuantumPurseError> {
+pub async fn get_encrypted_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -228,7 +228,7 @@ pub async fn get_child_key(pub_key: &str) -> Result<Option<SphincsPlusSigner>, Q
 /// - `Result<Vec<SphincsPlusSigner>, QuantumPurseError>` - A vector of all stored child keys, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-pub async fn get_child_keys() -> Result<Vec<SphincsPlusSigner>, QuantumPurseError> {
+pub async fn get_encrypted_child_keys() -> Result<Vec<SphincsPlusSigner>, QuantumPurseError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -431,7 +431,7 @@ impl AuthKeyRetriever {
             .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
         seed.zeroize();
         password.zeroize();
-        set_master_seed(encrypted_seed)
+        set_encrypted_master_seed(encrypted_seed)
             .await
             .map_err(|e| e.to_jsvalue())?;
         Ok(())
@@ -453,13 +453,13 @@ impl AuthKeyRetriever {
         let password = password.to_vec();
         let mut password_clone = password.clone();
 
-        let master_seed = get_master_seed()
+        let master_seed = get_encrypted_master_seed()
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
         let mut seed = decrypt(&password, master_seed)?.to_vec();
 
-        let child_keys = get_child_keys().await.map_err(|e| e.to_jsvalue())?;
+        let child_keys = get_encrypted_child_keys().await.map_err(|e| e.to_jsvalue())?;
         let child_index = child_keys.len();
         let path = format!("pq/ckb/{}", child_index);
         let mut sphincs_seed = vec![0u8; 32];
@@ -481,7 +481,7 @@ impl AuthKeyRetriever {
             sphincs_plus_pri_enc: encrypted_pri,
         };
 
-        set_child_key(child_key).await.map_err(|e| e.to_jsvalue())?;
+        add_encrypted_child_key(child_key).await.map_err(|e| e.to_jsvalue())?;
 
         seed.zeroize();
         password_clone.zeroize();
@@ -513,7 +513,7 @@ impl AuthKeyRetriever {
         let encrypted_seed = encrypt(&password, &seed_phrase)?;
         password.zeroize();
         seed_phrase.zeroize();
-        set_master_seed(encrypted_seed)
+        set_encrypted_master_seed(encrypted_seed)
             .await
             .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
         Ok(())
@@ -532,7 +532,7 @@ impl AuthKeyRetriever {
     #[wasm_bindgen]
     pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
-        let encrypted_seed = get_master_seed()
+        let encrypted_seed = get_encrypted_master_seed()
             .await
             .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?
             .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
