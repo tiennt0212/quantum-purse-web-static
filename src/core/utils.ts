@@ -351,3 +351,17 @@ export function uint8ArrayToHexString(arr: Uint8Array): string {
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('');
 }
+
+
+/**
+ * Converts a utf8 byte encoded as uint8raay to the utf8.
+ * @param arr - The uint8 array to convert.
+ * @returns A hex string.
+ */
+export function bytesToUtf8(bytes: Uint8Array): string {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error('bytesToUtf8 expected Uint8Array, got ' + typeof bytes);
+  }
+  const decoder = new TextDecoder('utf-8');
+  return decoder.decode(bytes);
+}
