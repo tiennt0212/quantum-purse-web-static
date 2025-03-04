@@ -147,7 +147,7 @@ export default class QuantumPurse {
    * @returns A promise that resolves when the store is cleared.
    */
   public async dbClear(): Promise<void> {
-    KeyVault.clear_database();
+    await KeyVault.clear_database();
   }
 
   /**
@@ -236,7 +236,7 @@ export default class QuantumPurse {
     seedPhrase: Uint8Array,
     password: Uint8Array
   ): Promise<void> {
-    KeyVault.import_seed(seedPhrase, password);
+    await KeyVault.import_seed(seedPhrase, password);
     password.fill(0);
     seedPhrase.fill(0);
   }
@@ -254,7 +254,7 @@ export default class QuantumPurse {
   }
   
   public async init(password: Uint8Array) {
-    KeyVault.key_init(password);
+    await KeyVault.key_init(password);
     password.fill(0);
   }
 
