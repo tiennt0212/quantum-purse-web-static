@@ -434,6 +434,7 @@ impl KeyVault {
     /// **Note** Only effective when master seed is empty.
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
+        // TODO try deleting password in js side from here
         let stored_seed = get_encrypted_master_seed()
             .await
             .map_err(|e| e.to_jsvalue())?;
@@ -441,12 +442,13 @@ impl KeyVault {
             debug!("[INFO]: Master seed already exists");
             Ok(())
         } else {
-            let mnemonic = gen_seed_phrase();
-            let mut seed = mnemonic.to_seed("");
+            let mut mnemonic = gen_seed_phrase();
+            // let mut seed = mnemonic.to_seed("");
             let mut password = password.to_vec();
-            let encrypted_seed = encrypt(&password, &seed)
+            let encrypted_seed = encrypt(&password, mnemonic.to_string().as_bytes())
                 .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
-            seed.zeroize();
+
+            mnemonic.zeroize();
             password.zeroize();
             set_encrypted_master_seed(encrypted_seed)
                 .await
