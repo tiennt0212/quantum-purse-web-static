@@ -37,7 +37,6 @@ const { ckbHash } = utils;
 export default class QuantumPurse {
   static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ signature length
   private accountPointer?: string; // sphincs+ public key corresponding to the encrypted private key in DB
-  private accounList?: string[];
   private static instance: QuantumPurse | null = null; // Singleton instance
 
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
@@ -159,12 +158,8 @@ export default class QuantumPurse {
    * @remark The password should be overwritten with zeros after use.
    */
   public async genAccount(password: Uint8Array): Promise<void> {
-    console.log("genaccount1")
     const sphincs_pub = await KeyUnlocker.gen_new_signer(password);
-    console.log("genaccount2 | sphincs_pub: ", sphincs_pub)
-    console.log(">>>this.accounList: ", this.accounList)
     await this.setAccPointer(sphincs_pub);
-    console.log(">>>this.accountPointer: ", this.accountPointer)
     password.fill(0);
   }
 
@@ -172,9 +167,10 @@ export default class QuantumPurse {
    * Sets the account pointer (There can be many sub/child accounts in db).
    * @param accPointer - The SPHINCS+ public key (as a pointer to the encrypted privatekey in DB) to set.
    */
-  public setAccPointer(accPointer: string): void {
-    if (!this.accounList?.includes(accPointer)) //TODO check when accountlist doens't exist
-      throw new Error("Invalid account pointer!");
+  public async setAccPointer(accPointer: string): Promise<void> {
+    const accList = await this.getAllAccounts();
+    if (!accList.includes(accPointer))
+      throw(Error("Invalid account pointer"));
     this.accountPointer = accPointer;
   }
 
@@ -256,10 +252,9 @@ export default class QuantumPurse {
   
   public async init(password: Uint8Array) {
     KeyUnlocker.key_init(password);
-    this.accounList = await KeyUnlocker.get_all_signer_pub();
   }
 
   public async getAllAccounts():Promise<string[]> {
-    return this.accounList ? this.accounList : [];
+    return await KeyUnlocker.get_all_signer_pub();
   }
 }
