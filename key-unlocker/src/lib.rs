@@ -58,7 +58,6 @@ pub struct EncryptionPacket {
 /// **Fields**:
 /// - `pub_key: String` - Hex-encoded SPHINCS+ public key.
 /// - `pri_enc: EncryptionPacket` - Encrypted SPHINCS+ private key, stored as an `EncryptionPacket`.
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SphincsPlusSigner {
     pub_key: String,
@@ -391,7 +390,7 @@ impl KeyUnlocker {
         Ok(())
     }
 
-    /// Retrieves all SPHINCS+ public keys from the database.
+    /// Retrieves all SPHINCS+ public keys of all sphhincs+ signer from the database.
     ///
     /// Returns:
     /// - A vector of hex-encoded sphincs+ public keys, or an error if retrieval fails.
@@ -432,16 +431,15 @@ impl KeyUnlocker {
     ///
     /// **Async**: Yes
     ///
-    /// **Note** Only run this when master seed is empty because set_encrypted_master_seed overwrites old seed.
+    /// **Note** Only effective when master seed is empty.
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
         let stored_seed = get_encrypted_master_seed()
             .await
             .map_err(|e| e.to_jsvalue())?;
         if stored_seed.is_some() {
-            Err(JsValue::from_str(
-                "Init key failed: Master seed already exists",
-            ))
+            debug!("[INFO]: Master seed already exists");
+            Ok(())
         } else {
             let mnemonic = gen_seed_phrase();
             let mut seed = mnemonic.to_seed("");
@@ -457,21 +455,20 @@ impl KeyUnlocker {
         }
     }
 
-    /// Generates a new SPHINCS+ child key pair derived from the master seed,
+    /// Generates a new SPHINCS+ signer - a child key pair derived from the master seed,
     /// encrypts the private key with the password, and stores/appends it in IndexedDB.
     ///
     /// **Parameters**:
     /// - `password: Uint8Array` - The password used to decrypt the master seed and encrypt the child private key.
     ///
     /// **Returns**:
-    /// - `Result<(), JsValue>` - A JavaScript Promise that resolves to `undefined` on success,
+    /// - `Result<(JsValue), JsValue>` - A JavaScript Promise that resolves to `the just-generated signer's public key` on success,
     ///   or rejects with a JavaScript error on failure.
     ///
     /// **Async**: Yes
     #[wasm_bindgen]
-    pub async fn gen_signer(password: Uint8Array) -> Result<(), JsValue> {
-        let password = password.to_vec();
-        let mut password_clone = password.clone();
+    pub async fn gen_new_signer(password: Uint8Array) -> Result<JsValue, JsValue> {
+        let mut password = password.to_vec();
 
         let master_seed = get_encrypted_master_seed()
             .await
@@ -493,8 +490,9 @@ impl KeyUnlocker {
                 .expect("Slice with incorrect length"),
         );
         let (pub_key, pri_key) = slh_dsa_shake_128f::try_keygen_with_rng(&mut rng)?;
+        let pub_key_clone = pub_key.clone();
         let mut pri_key_bytes = pri_key.into_bytes();
-        let encrypted_pri = encrypt(&password_clone, &pri_key_bytes)?;
+        let encrypted_pri = encrypt(&password, &pri_key_bytes)?;
 
         let child_key = SphincsPlusSigner {
             pub_key: encode(pub_key.into_bytes()),
@@ -506,13 +504,13 @@ impl KeyUnlocker {
             .map_err(|e| e.to_jsvalue())?;
 
         seed.zeroize();
-        password_clone.zeroize();
+        password.zeroize();
         pri_key_bytes.zeroize();
 
-        Ok(())
+        Ok(JsValue::from_str(&encode(pub_key_clone.into_bytes())))
     }
 
-    /// Imports a seed phrase by encrypting it with the provided password and storing it as the master seed.
+    /// Imports a master seed by encrypting it with the provided password and storing it as the master seed.
     ///
     /// **Parameters**:
     /// - `seed_phrase: Uint8Array` - The seed phrase utf8-encoded as Uint8Array to import.
@@ -541,7 +539,7 @@ impl KeyUnlocker {
         Ok(())
     }
 
-    /// Exports the master seed phrase by decrypting it with the provided password.
+    /// Exports the master seed by decrypting it with the provided password.
     ///
     /// **Parameters**:
     /// - `password: Uint8Array` - The password used to decrypt the master seed.
@@ -567,7 +565,7 @@ impl KeyUnlocker {
     ///
     /// **Parameters**:
     /// - `password: Uint8Array` - The password used to decrypt the private key.
-    /// - `sphincsp_pub: SphincsPlusSigner` - The signer containing the encrypted private key.
+    /// - `sphincs_plus_pub: String` - The sphincs+ public key with which encryted privatekey will be used to sign.
     /// - `message: Uint8Array` - The message to be signed.
     ///
     /// **Returns**:
@@ -578,11 +576,11 @@ impl KeyUnlocker {
     #[wasm_bindgen]
     pub async fn sign(
         password: Uint8Array,
-        sphincsp_pub: String,
+        sphincs_plus_pub: String,
         message: Uint8Array,
     ) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
-        let child_key = get_signer(&sphincsp_pub)
+        let child_key = get_signer(&sphincs_plus_pub)
             .await
             .map_err(|e| e.to_jsvalue())?
             .unwrap();
