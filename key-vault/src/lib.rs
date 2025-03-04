@@ -522,6 +522,7 @@ impl KeyVault {
         seed_phrase: Uint8Array,
         password: Uint8Array,
     ) -> Result<(), JsValue> {
+        // TODO verify valid seed/ or do it in js side
         let mut password = password.to_vec();
         let mut mnemonic = seed_phrase.to_vec();
         let encrypted_seed = encrypt(&password, &mnemonic)?;
