@@ -108,7 +108,7 @@ dist
 package-lock.json
 
 # Rust key manager build output
-key-unlocker/pkg/
-key-unlocker/target/
-key-unlocker/Cargo.lock
+key-vault/pkg/
+key-vault/target/
+key-vault/Cargo.lock
 target/

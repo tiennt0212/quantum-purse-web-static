@@ -23,7 +23,7 @@ import { wordlist } from "@scure/bip39/wordlists/english";
 import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
 import __wbg_init, {
   KeyUnlocker,
-} from "../../key-unlocker/pkg/key_unlocker";
+} from "../../key-vault/pkg/key_unlocker";
 
 const { ckbHash } = utils;
 
