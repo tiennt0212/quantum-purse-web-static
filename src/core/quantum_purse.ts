@@ -249,8 +249,9 @@ export default class QuantumPurse {
    * @remark The password is overwritten with zeros after use. Handle the returned seed carefully to avoid leakage.
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
-    return await KeyVault.export_seed(password);
+    const seed = await KeyVault.export_seed(password);
     password.fill(0);
+    return seed;
   }
   
   public async init(password: Uint8Array) {
