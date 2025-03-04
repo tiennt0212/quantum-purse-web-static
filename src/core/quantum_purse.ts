@@ -22,7 +22,7 @@ import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
 import __wbg_init, {
-  KeyUnlocker,
+  KeyVault,
 } from "../../key-vault/pkg/key_unlocker";
 
 const { ckbHash } = utils;
@@ -125,7 +125,7 @@ export default class QuantumPurse {
 
     const signingEntries = tx.get("signingEntries").toArray();
 
-    const signature = await KeyUnlocker.sign(password, this.accountPointer, hexStringToUint8Array(signingEntries[0].message));
+    const signature = await KeyVault.sign(password, this.accountPointer, hexStringToUint8Array(signingEntries[0].message));
 
     const serializedSignature = new Reader(signature.buffer).serializeJson();
 
@@ -147,7 +147,7 @@ export default class QuantumPurse {
    * @returns A promise that resolves when the store is cleared.
    */
   public async dbClear(): Promise<void> {
-    KeyUnlocker.clear_database();
+    KeyVault.clear_database();
   }
 
   /**
@@ -158,7 +158,7 @@ export default class QuantumPurse {
    * @remark The password should be overwritten with zeros after use.
    */
   public async genAccount(password: Uint8Array): Promise<void> {
-    const sphincs_pub = await KeyUnlocker.gen_new_signer(password);
+    const sphincs_pub = await KeyVault.gen_new_signer(password);
     await this.setAccPointer(sphincs_pub);
     password.fill(0);
   }
@@ -236,7 +236,7 @@ export default class QuantumPurse {
     seedPhrase: Uint8Array,
     password: Uint8Array
   ): Promise<void> {
-    KeyUnlocker.import_seed(seedPhrase, password);
+    KeyVault.import_seed(seedPhrase, password);
     password.fill(0);
     seedPhrase.fill(0);
   }
@@ -249,16 +249,16 @@ export default class QuantumPurse {
    * @remark The password is overwritten with zeros after use. Handle the returned seed carefully to avoid leakage.
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
-    return await KeyUnlocker.export_seed(password);
+    return await KeyVault.export_seed(password);
     password.fill(0);
   }
   
   public async init(password: Uint8Array) {
-    KeyUnlocker.key_init(password);
+    KeyVault.key_init(password);
     password.fill(0);
   }
 
   public async getAllAccounts():Promise<string[]> {
-    return await KeyUnlocker.get_all_signer_pub();
+    return await KeyVault.get_all_signer_pub();
   }
 }

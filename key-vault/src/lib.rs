@@ -1,4 +1,4 @@
-//! # QuantumPurse KeyUnlocker
+//! # QuantumPurse KeyVault
 //!
 //! This module provides a secure authentication interface for managing cryptographic keys in
 //! QuantumPurse using WebAssembly. It leverages AES-GCM for encryption, Scrypt for key derivation and
@@ -31,7 +31,7 @@ use web_sys::js_sys::Uint8Array;
 use zeroize::Zeroize;
 
 mod errors;
-use crate::errors::KeyUnlockerError;
+use crate::errors::KeyVaultError;
 
 #[macro_export]
 macro_rules! debug {
@@ -66,7 +66,7 @@ pub struct SphincsPlusSigner {
 
 /// Main struct for managing authentication keys in WebAssembly.
 #[wasm_bindgen]
-pub struct KeyUnlocker;
+pub struct KeyVault;
 
 // Constants
 const SALT_LENGTH: usize = 16; // 128-bit salt
@@ -79,10 +79,10 @@ const MASTER_KEY: &str = "master_key_entry";
 /// Opens the IndexedDB database, creating object stores if necessary.
 ///
 /// **Returns**:
-/// - `Result<Database, KeyUnlocker>` - The opened database on success, or an error if the operation fails.
+/// - `Result<Database, KeyVault>` - The opened database on success, or an error if the operation fails.
 ///
 /// **Async**: Yes
-async fn open_db() -> Result<Database, KeyUnlockerError> {
+async fn open_db() -> Result<Database, KeyVaultError> {
     Database::open(DB_NAME)
         .with_version(1u8)
         .with_on_blocked(|_event| Ok(()))
@@ -96,7 +96,7 @@ async fn open_db() -> Result<Database, KeyUnlockerError> {
             Ok(())
         })
         .await
-        .map_err(|e| KeyUnlockerError::DatabaseError(format!("Failed to open IndexedDB: {}", e)))
+        .map_err(|e| KeyVaultError::DatabaseError(format!("Failed to open IndexedDB: {}", e)))
 }
 
 /// Stores the encrypted master seed in the database.
@@ -105,14 +105,14 @@ async fn open_db() -> Result<Database, KeyUnlockerError> {
 /// - `encryption_packet: EncryptionPacket` - The encrypted master seed data to store.
 ///
 /// **Returns**:
-/// - `Result<(), KeyUnlocker>` - Ok on success, or an error if storage fails.
+/// - `Result<(), KeyVault>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
 ///
 /// **Warning**: This method overwrite the existing master seed in db.
 async fn set_encrypted_master_seed(
     encryption_packet: EncryptionPacket,
-) -> Result<(), KeyUnlockerError> {
+) -> Result<(), KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -130,10 +130,10 @@ async fn set_encrypted_master_seed(
 /// Retrieves the encrypted master seed from the database.
 ///
 /// **Returns**:
-/// - `Result<Option<EncryptionPacket>, KeyUnlocker>` - The encrypted master seed if it exists, `None` if not found, or an error if retrieval fails.
+/// - `Result<Option<EncryptionPacket>, KeyVault>` - The encrypted master seed if it exists, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlockerError> {
+async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(MASTER_KEY_STORE)
@@ -144,7 +144,7 @@ async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlo
     if let Some(js_value) = store
         .get(MASTER_KEY)
         .await
-        .map_err(|e| KeyUnlockerError::DatabaseError(e.to_string()))?
+        .map_err(|e| KeyVaultError::DatabaseError(e.to_string()))?
     {
         let encryption_packet: EncryptionPacket = serde_wasm_bindgen::from_value(js_value)?;
         Ok(Some(encryption_packet))
@@ -159,10 +159,10 @@ async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyUnlo
 /// - `signer: SphincsPlusSigner` - The SPHINCS+ key pair to store.
 ///
 /// **Returns**:
-/// - `Result<(), KeyUnlocker>` - Ok on success, or an error if storage fails.
+/// - `Result<(), KeyVault>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlockerError> {
+async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -187,10 +187,10 @@ async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlockerError> {
                     // Key already exists, skip
                     Ok(())
                 } else {
-                    Err(KeyUnlockerError::DatabaseError(dom_err.to_string()))
+                    Err(KeyVaultError::DatabaseError(dom_err.to_string()))
                 }
             } else {
-                Err(KeyUnlockerError::DatabaseError(e.to_string()))
+                Err(KeyVaultError::DatabaseError(e.to_string()))
             }
         }
     }
@@ -202,12 +202,12 @@ async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyUnlockerError> {
 /// - `pub_key: &str` - The hex-encoded public key of the child key to retrieve.
 ///
 /// **Returns**:
-/// - `Result<Option<SphincsPlusSigner>, KeyUnlocker>` - The child key if found, `None` if not found, or an error if retrieval fails.
+/// - `Result<Option<SphincsPlusSigner>, KeyVault>` - The child key if found, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
 pub async fn get_signer(
     pub_key: &str,
-) -> Result<Option<SphincsPlusSigner>, KeyUnlockerError> {
+) -> Result<Option<SphincsPlusSigner>, KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -218,7 +218,7 @@ pub async fn get_signer(
     if let Some(js_value) = store
         .get(pub_key)
         .await
-        .map_err(|e| KeyUnlockerError::DatabaseError(e.to_string()))?
+        .map_err(|e| KeyVaultError::DatabaseError(e.to_string()))?
     {
         let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)?;
         Ok(Some(child_key))
@@ -234,34 +234,34 @@ pub async fn get_signer(
 /// - `store_name: &str` - The name of the object store to clear.
 ///
 /// **Returns**:
-/// - `Result<(), KeyUnlocker>` - Ok on success, or an error if the operation fails.
+/// - `Result<(), KeyVault>` - Ok on success, or an error if the operation fails.
 ///
 /// **Async**: Yes
-async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyUnlockerError> {
+async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyVaultError> {
     let tx = db
         .transaction(store_name)
         .with_mode(TransactionMode::Readwrite)
         .build()
         .map_err(|e| {
-            KeyUnlockerError::DatabaseError(format!(
+            KeyVaultError::DatabaseError(format!(
                 "Error starting transaction for {}: {}",
                 store_name, e
             ))
         })?;
     let store = tx.object_store(store_name).map_err(|e| {
-        KeyUnlockerError::DatabaseError(format!(
+        KeyVaultError::DatabaseError(format!(
             "Error getting object store {}: {}",
             store_name, e
         ))
     })?;
     store.clear().map_err(|e| {
-        KeyUnlockerError::DatabaseError(format!(
+        KeyVaultError::DatabaseError(format!(
             "Error clearing object store {}: {}",
             store_name, e
         ))
     })?;
     tx.commit().await.map_err(|e| {
-        KeyUnlockerError::DatabaseError(format!(
+        KeyVaultError::DatabaseError(format!(
             "Error committing transaction for {}: {}",
             store_name, e
         ))
@@ -361,14 +361,14 @@ fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String>
 }
 
 #[wasm_bindgen]
-impl KeyUnlocker {
-    /// Constructs a new `KeyUnlocker`. Stateless and serve as a namespace only.
+impl KeyVault {
+    /// Constructs a new `KeyVault`. Stateless and serve as a namespace only.
     ///
     /// **Returns**:
-    /// - `KeyUnlocker` - A new instance of the struct.
+    /// - `KeyVault` - A new instance of the struct.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        KeyUnlocker
+        KeyVault
     }
 
     /// Clears all data in the `master_key_store` and `child_keys_store` in IndexedDB.
