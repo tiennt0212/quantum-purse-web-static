@@ -556,8 +556,8 @@ impl KeyVault {
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
-        password.zeroize();
         let seed = decrypt(&password, encrypted_seed)?;
+        password.zeroize();
         Ok(Uint8Array::from(seed.as_slice()))
     }
 
