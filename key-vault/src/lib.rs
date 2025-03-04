@@ -290,6 +290,8 @@ fn gen_seed_phrase() -> Mnemonic {
 ///
 /// **Returns**:
 /// - `Result<CipherPayload, String>` - A `CipherPayload` containing the encrypted data, salt, and IV on success, or an error message on failure.
+/// 
+/// Warning: Proper zeroization of passwords and inputs is the responsibility of the caller.
 fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
     let mut salt = vec![0u8; SALT_LENGTH];
     let mut iv = vec![0u8; IV_LENGTH];
@@ -326,6 +328,8 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
 ///
 /// **Returns**:
 /// - `Result<Vec<u8>, String>` - The decrypted plaintext on success, or an error message on failure.
+/// 
+/// Warning: Proper zeroization of passwords and inputs is the responsibility of the caller.
 fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let salt = decode(payload.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
     let iv = decode(payload.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
@@ -340,13 +344,13 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let aes_key: &Key<Aes256Gcm> = Key::<Aes256Gcm>::from_slice(&scrypt_key);
     let cipher = Aes256Gcm::new(aes_key);
     let nonce = Nonce::from_slice(&iv);
-    let plain_text = cipher
+    let decipher = cipher
         .decrypt(nonce, cipher_text.as_ref())
         .map_err(|e| format!("Decryption error: {:?}", e))?;
 
     scrypt_key.zeroize();
 
-    Ok(plain_text)
+    Ok(decipher)
 }
 
 #[wasm_bindgen]
@@ -495,6 +499,7 @@ impl KeyVault {
         seed.zeroize();
         password.zeroize();
         pri_key_bytes.zeroize();
+        // TODO check if can shred rng
 
         Ok(JsValue::from_str(&encode(pub_key_clone.into_bytes())))
     }
@@ -518,10 +523,10 @@ impl KeyVault {
         password: Uint8Array,
     ) -> Result<(), JsValue> {
         let mut password = password.to_vec();
-        let mut seed_phrase = seed_phrase.to_vec();
-        let encrypted_seed = encrypt(&password, &seed_phrase)?;
+        let mut mnemonic = seed_phrase.to_vec();
+        let encrypted_seed = encrypt(&password, &mnemonic)?;
         password.zeroize();
-        seed_phrase.zeroize();
+        mnemonic.zeroize();
         set_encrypted_mnemonic_phrase(encrypted_seed)
             .await
             .map_err(|e| e.to_jsvalue())?;
@@ -547,9 +552,9 @@ impl KeyVault {
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
-        let seed = decrypt(&password, encrypted_seed)?;
+        let mnemonic = decrypt(&password, encrypted_seed)?;
         password.zeroize();
-        Ok(Uint8Array::from(seed.as_slice()))
+        Ok(Uint8Array::from(mnemonic.as_slice()))
     }
 
     /// Signs a message using the SPHINCS+ private key after decrypting it with the provided password.
@@ -576,6 +581,7 @@ impl KeyVault {
             .map_err(|e| e.to_jsvalue())?
             .unwrap();
 
+        // TODO check to zerolize pri_key_bytes when panic at try_into()
         let pri_key_bytes = decrypt(&password, pair.pri_enc)?.to_vec();
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
             &pri_key_bytes.try_into().expect("Fail to parse private key"),
