@@ -237,6 +237,8 @@ export default class QuantumPurse {
     password: Uint8Array
   ): Promise<void> {
     KeyUnlocker.import_seed(seedPhrase, password);
+    password.fill(0);
+    seedPhrase.fill(0);
   }
 
   /**
@@ -248,10 +250,12 @@ export default class QuantumPurse {
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
     return await KeyUnlocker.export_seed(password);
+    password.fill(0);
   }
   
   public async init(password: Uint8Array) {
     KeyUnlocker.key_init(password);
+    password.fill(0);
   }
 
   public async getAllAccounts():Promise<string[]> {
