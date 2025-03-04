@@ -1,13 +1,13 @@
 //! # QuantumPurse KeyVault
 //!
 //! This module provides a secure authentication interface for managing cryptographic keys in
-//! QuantumPurse using WebAssembly. It leverages AES-GCM for encryption, Scrypt for key derivation and
-//! the SPHINCS+ signature scheme for post-quantum QuantumPurse transaction signing. Sensitive data is
-//! by default encrypted and stored in the browser via IndexedDB with key gen & signing authenticated
-//! by user-provided passwords.
-//!
-//! The module supports generating a BIP39 mnemonic seed phrase, deriving a master seed,
-//! generating SPHINCS+ child key pairs, and signing SPHINCS+ messages.
+//! QuantumPurse using WebAssembly. It leverages AES-GCM for encryption, Scrypt for key derivation,
+//! and the SPHINCS+ signature scheme for post-quantum transaction signing. Sensitive data, including
+//! the BIP39 mnemonic and derived SPHINCS+ private keys, is encrypted and stored in the browser via
+//! IndexedDB, with access authenticated by user-provided passwords. The module supports generating
+//! a BIP39 mnemonic, storing it encrypted, deriving SPHINCS+ child key pairs from the mnemonic using
+//! Scrypt with the mnemonic as the password and a derivation path as the salt, and signing messages
+//! with the SPHINCS+ private keys.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -40,14 +40,14 @@ macro_rules! debug {
     }
 }
 
-/// Represents an encrypted packet containing salt, IV, and ciphertext, all hex-encoded.
+/// Represents an encrypted payload containing salt, IV, and ciphertext, all hex-encoded.
 ///
 /// **Fields**:
 /// - `salt: String` - Hex-encoded salt used for key derivation with Scrypt.
 /// - `iv: String` - Hex-encoded initialization vector (nonce) for AES-GCM encryption.
 /// - `cipher_text: String` - Hex-encoded encrypted data produced by AES-GCM.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct EncryptionPacket {
+pub struct CipherPayload {
     salt: String,
     iv: String,
     cipher_text: String,
@@ -57,11 +57,11 @@ pub struct EncryptionPacket {
 ///
 /// **Fields**:
 /// - `pub_key: String` - Hex-encoded SPHINCS+ public key.
-/// - `pri_enc: EncryptionPacket` - Encrypted SPHINCS+ private key, stored as an `EncryptionPacket`.
+/// - `pri_enc: CipherPayload` - Encrypted SPHINCS+ private key, stored as a `CipherPayload`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SphincsPlusSigner {
+pub struct SphincsPlusKeyPair {
     pub_key: String,
-    pri_enc: EncryptionPacket,
+    pri_enc: CipherPayload,
 }
 
 /// Main struct for managing authentication keys in WebAssembly.
@@ -71,15 +71,15 @@ pub struct KeyVault;
 // Constants
 const SALT_LENGTH: usize = 16; // 128-bit salt
 const IV_LENGTH: usize = 12; // 96-bit IV for AES-GCM
-const DB_NAME: &str = "quantum_purse_db";
-const MASTER_KEY_STORE: &str = "master_key_store";
+const DB_NAME: &str = "quantum_purse";
+const SEED_PHRASE_STORE: &str = "seed_phrase_store";
 const CHILD_KEYS_STORE: &str = "child_keys_store";
-const MASTER_KEY: &str = "master_key_entry";
+const SEED_PHRASE_KEY: &str = "seed_phrase";
 
 /// Opens the IndexedDB database, creating object stores if necessary.
 ///
 /// **Returns**:
-/// - `Result<Database, KeyVault>` - The opened database on success, or an error if the operation fails.
+/// - `Result<Database, KeyVaultError>` - The opened database on success, or an error if the operation fails.
 ///
 /// **Async**: Yes
 async fn open_db() -> Result<Database, KeyVaultError> {
@@ -87,8 +87,11 @@ async fn open_db() -> Result<Database, KeyVaultError> {
         .with_version(1u8)
         .with_on_blocked(|_event| Ok(()))
         .with_on_upgrade_needed(|_event, db| {
-            if !db.object_store_names().any(|name| name == MASTER_KEY_STORE) {
-                db.create_object_store(MASTER_KEY_STORE).build()?;
+            if !db
+                .object_store_names()
+                .any(|name| name == SEED_PHRASE_STORE)
+            {
+                db.create_object_store(SEED_PHRASE_STORE).build()?;
             }
             if !db.object_store_names().any(|name| name == CHILD_KEYS_STORE) {
                 db.create_object_store(CHILD_KEYS_STORE).build()?;
@@ -99,70 +102,68 @@ async fn open_db() -> Result<Database, KeyVaultError> {
         .map_err(|e| KeyVaultError::DatabaseError(format!("Failed to open IndexedDB: {}", e)))
 }
 
-/// Stores the encrypted master seed in the database.
+/// Stores the encrypted mnemonic phrase in the database.
 ///
 /// **Parameters**:
-/// - `encryption_packet: EncryptionPacket` - The encrypted master seed data to store.
+/// - `payload: CipherPayload` - The encrypted mnemonic phrase data to store.
 ///
 /// **Returns**:
-/// - `Result<(), KeyVault>` - Ok on success, or an error if storage fails.
+/// - `Result<(), KeyVaultError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
 ///
-/// **Warning**: This method overwrite the existing master seed in db.
-async fn set_encrypted_master_seed(
-    encryption_packet: EncryptionPacket,
-) -> Result<(), KeyVaultError> {
+/// **Warning**: This method overwrites the existing mnemonic phrase in the database.
+async fn set_encrypted_mnemonic_phrase(payload: CipherPayload) -> Result<(), KeyVaultError> {
     let db = open_db().await?;
     let tx = db
-        .transaction(MASTER_KEY_STORE)
+        .transaction(SEED_PHRASE_STORE)
         .with_mode(TransactionMode::Readwrite)
         .build()?;
-    let store = tx.object_store(MASTER_KEY_STORE)?;
+    let store = tx.object_store(SEED_PHRASE_STORE)?;
 
-    let js_value = serde_wasm_bindgen::to_value(&encryption_packet)?;
+    let js_value = serde_wasm_bindgen::to_value(&payload)?;
 
-    store.put(&js_value).with_key(MASTER_KEY).await?;
+    store.put(&js_value).with_key(SEED_PHRASE_KEY).await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// Retrieves the encrypted master seed from the database.
+/// Retrieves the encrypted mnemonic phrase from the database.
 ///
 /// **Returns**:
-/// - `Result<Option<EncryptionPacket>, KeyVault>` - The encrypted master seed if it exists, `None` if not found, or an error if retrieval fails.
+/// - `Result<Option<CipherPayload>, KeyVaultError>` - The encrypted mnemonic phrase if it exists, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-async fn get_encrypted_master_seed() -> Result<Option<EncryptionPacket>, KeyVaultError> {
+async fn get_encrypted_mnemonic_phrase() -> Result<Option<CipherPayload>, KeyVaultError> {
     let db = open_db().await?;
     let tx = db
-        .transaction(MASTER_KEY_STORE)
+        .transaction(SEED_PHRASE_STORE)
         .with_mode(TransactionMode::Readonly)
         .build()?;
-    let store = tx.object_store(MASTER_KEY_STORE)?;
+    let store = tx.object_store(SEED_PHRASE_STORE)?;
 
     if let Some(js_value) = store
-        .get(MASTER_KEY)
+        .get(SEED_PHRASE_KEY)
         .await
         .map_err(|e| KeyVaultError::DatabaseError(e.to_string()))?
     {
-        let encryption_packet: EncryptionPacket = serde_wasm_bindgen::from_value(js_value)?;
-        Ok(Some(encryption_packet))
+        let payload: CipherPayload = serde_wasm_bindgen::from_value(js_value)?;
+        Ok(Some(payload))
     } else {
         Ok(None)
     }
 }
 
-/// Stores a child key (SPHINCS+ signer) in the database.
+/// Stores a child key (SPHINCS+ key pair) in the database.
 ///
 /// **Parameters**:
-/// - `signer: SphincsPlusSigner` - The SPHINCS+ key pair to store.
+/// - `pair: SphincsPlusKeyPair` - The SPHINCS+ key pair to store.
 ///
 /// **Returns**:
-/// - `Result<(), KeyVault>` - Ok on success, or an error if storage fails.
+/// - `Result<(), KeyVaultError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyVaultError> {
+async fn add_key_pair(pair: SphincsPlusKeyPair) -> Result<(), KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -170,13 +171,9 @@ async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyVaultError> {
         .build()?;
     let store = tx.object_store(CHILD_KEYS_STORE)?;
 
-    let js_value = serde_wasm_bindgen::to_value(&signer)?;
+    let js_value = serde_wasm_bindgen::to_value(&pair)?;
 
-    match store
-        .add(js_value)
-        .with_key(signer.pub_key)
-        .build()
-    {
+    match store.add(js_value).with_key(pair.pub_key).build() {
         Ok(_) => {
             tx.commit().await?;
             Ok(())
@@ -196,18 +193,16 @@ async fn add_signer(signer: SphincsPlusSigner) -> Result<(), KeyVaultError> {
     }
 }
 
-/// Retrieves a child key by its public key from the database.
+/// Retrieves a child key pair by its public key from the database.
 ///
 /// **Parameters**:
 /// - `pub_key: &str` - The hex-encoded public key of the child key to retrieve.
 ///
 /// **Returns**:
-/// - `Result<Option<SphincsPlusSigner>, KeyVault>` - The child key if found, `None` if not found, or an error if retrieval fails.
+/// - `Result<Option<SphincsPlusKeyPair>, KeyVaultError>` - The child key if found, `None` if not found, or an error if retrieval fails.
 ///
 /// **Async**: Yes
-pub async fn get_signer(
-    pub_key: &str,
-) -> Result<Option<SphincsPlusSigner>, KeyVaultError> {
+pub async fn get_key_pair(pub_key: &str) -> Result<Option<SphincsPlusKeyPair>, KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
@@ -220,8 +215,8 @@ pub async fn get_signer(
         .await
         .map_err(|e| KeyVaultError::DatabaseError(e.to_string()))?
     {
-        let child_key: SphincsPlusSigner = serde_wasm_bindgen::from_value(js_value)?;
-        Ok(Some(child_key))
+        let pair: SphincsPlusKeyPair = serde_wasm_bindgen::from_value(js_value)?;
+        Ok(Some(pair))
     } else {
         Ok(None)
     }
@@ -234,7 +229,7 @@ pub async fn get_signer(
 /// - `store_name: &str` - The name of the object store to clear.
 ///
 /// **Returns**:
-/// - `Result<(), KeyVault>` - Ok on success, or an error if the operation fails.
+/// - `Result<(), KeyVaultError>` - Ok on success, or an error if the operation fails.
 ///
 /// **Async**: Yes
 async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyVaultError> {
@@ -249,16 +244,10 @@ async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyVa
             ))
         })?;
     let store = tx.object_store(store_name).map_err(|e| {
-        KeyVaultError::DatabaseError(format!(
-            "Error getting object store {}: {}",
-            store_name, e
-        ))
+        KeyVaultError::DatabaseError(format!("Error getting object store {}: {}", store_name, e))
     })?;
     store.clear().map_err(|e| {
-        KeyVaultError::DatabaseError(format!(
-            "Error clearing object store {}: {}",
-            store_name, e
-        ))
+        KeyVaultError::DatabaseError(format!("Error clearing object store {}: {}", store_name, e))
     })?;
     tx.commit().await.map_err(|e| {
         KeyVaultError::DatabaseError(format!(
@@ -300,8 +289,8 @@ fn gen_seed_phrase() -> Mnemonic {
 /// - `input: &[u8]` - The plaintext data to encrypt.
 ///
 /// **Returns**:
-/// - `Result<EncryptionPacket, String>` - An `EncryptionPacket` containing the encrypted data, salt, and IV on success, or an error message on failure.
-fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String> {
+/// - `Result<CipherPayload, String>` - A `CipherPayload` containing the encrypted data, salt, and IV on success, or an error message on failure.
+fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
     let mut salt = vec![0u8; SALT_LENGTH];
     let mut iv = vec![0u8; IV_LENGTH];
     let random_bytes = get_random_bytes(SALT_LENGTH + IV_LENGTH).map_err(|e| e.to_string())?;
@@ -322,7 +311,7 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String> {
 
     scrypt_key.zeroize();
 
-    Ok(EncryptionPacket {
+    Ok(CipherPayload {
         salt: encode(salt),
         iv: encode(iv),
         cipher_text: encode(cipher_text),
@@ -333,15 +322,15 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<EncryptionPacket, String> {
 ///
 /// **Parameters**:
 /// - `password: &[u8]` - The password used to derive the decryption key.
-/// - `packet: EncryptionPacket` - The encrypted data packet containing salt, IV, and ciphertext.
+/// - `payload: CipherPayload` - The encrypted data payload containing salt, IV, and ciphertext.
 ///
 /// **Returns**:
 /// - `Result<Vec<u8>, String>` - The decrypted plaintext on success, or an error message on failure.
-fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String> {
-    let salt = decode(packet.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
-    let iv = decode(packet.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
+fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
+    let salt = decode(payload.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
+    let iv = decode(payload.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
     let cipher_text =
-        decode(packet.cipher_text).map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
+        decode(payload.cipher_text).map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
 
     let mut scrypt_key = vec![0u8; 32];
     let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
@@ -362,7 +351,7 @@ fn decrypt(password: &[u8], packet: EncryptionPacket) -> Result<Vec<u8>, String>
 
 #[wasm_bindgen]
 impl KeyVault {
-    /// Constructs a new `KeyVault`. Stateless and serve as a namespace only.
+    /// Constructs a new `KeyVault`. Stateless and serves as a namespace only.
     ///
     /// **Returns**:
     /// - `KeyVault` - A new instance of the struct.
@@ -371,7 +360,7 @@ impl KeyVault {
         KeyVault
     }
 
-    /// Clears all data in the `master_key_store` and `child_keys_store` in IndexedDB.
+    /// Clears all data in the `seed_phrase_store` and `child_keys_store` in IndexedDB.
     ///
     /// **Returns**:
     /// - `Result<(), JsValue>` - A JavaScript Promise that resolves to `undefined` on success,
@@ -381,7 +370,7 @@ impl KeyVault {
     #[wasm_bindgen]
     pub async fn clear_database() -> Result<(), JsValue> {
         let db = open_db().await.map_err(|e| e.to_jsvalue())?;
-        clear_object_store(&db, MASTER_KEY_STORE)
+        clear_object_store(&db, SEED_PHRASE_STORE)
             .await
             .map_err(|e| e.to_jsvalue())?;
         clear_object_store(&db, CHILD_KEYS_STORE)
@@ -390,12 +379,15 @@ impl KeyVault {
         Ok(())
     }
 
-    /// Retrieves all SPHINCS+ public keys of all sphhincs+ signer from the database.
+    /// Retrieves all SPHINCS+ public keys from the database.
     ///
-    /// Returns:
-    /// - A vector of hex-encoded sphincs+ public keys, or an error if retrieval fails.
+    /// **Returns**:
+    /// - `Result<Vec<String>, JsValue>` - A JavaScript Promise that resolves to an array of hex-encoded SPHINCS+ public keys on success,
+    ///   or rejects with a JavaScript error on failure.
+    ///
+    /// **Async**: Yes
     #[wasm_bindgen]
-    pub async fn get_all_signer_pub() -> Result<Vec<String>, JsValue> {
+    pub async fn get_all_sphincs_pub() -> Result<Vec<String>, JsValue> {
         /// Error conversion helper
         fn map_db_error<T>(result: Result<T, DBError>) -> Result<T, JsValue> {
             result.map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))
@@ -419,11 +411,10 @@ impl KeyVault {
         Ok(pub_keys)
     }
 
-    /// Initializes the master seed by generating a BIP39 mnemonic, deriving the seed,
-    /// encrypting it with the provided password, and storing it in IndexedDB.
+    /// Initializes the mnemonic phrase by generating a BIP39 mnemonic, encrypting it with the provided password, and storing it in IndexedDB.
     ///
     /// **Parameters**:
-    /// - `password: Uint8Array` - The password used to encrypt the master seed.
+    /// - `password: Uint8Array` - The password used to encrypt the mnemonic.
     ///
     /// **Returns**:
     /// - `Result<(), JsValue>` - A JavaScript Promise that resolves to `undefined` on success,
@@ -431,15 +422,15 @@ impl KeyVault {
     ///
     /// **Async**: Yes
     ///
-    /// **Note** Only effective when master seed is empty.
+    /// **Note**: Only effective when the mnemonic phrase is not yet set.
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
         // TODO try deleting password in js side from here
-        let stored_seed = get_encrypted_master_seed()
+        let stored_seed = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?;
         if stored_seed.is_some() {
-            debug!("[INFO]: Master seed already exists");
+            debug!("[INFO]: Mnemonic phrase already exists");
             Ok(())
         } else {
             let mut mnemonic = gen_seed_phrase();
@@ -450,37 +441,35 @@ impl KeyVault {
 
             mnemonic.zeroize();
             password.zeroize();
-            set_encrypted_master_seed(encrypted_seed)
+            set_encrypted_mnemonic_phrase(encrypted_seed)
                 .await
                 .map_err(|e| e.to_jsvalue())?;
             Ok(())
         }
     }
 
-    /// Generates a new SPHINCS+ signer - a child key pair derived from the master seed,
+    /// Generates a new SPHINCS+ key pair - a SPHINCS+ child key pair derived from the mnemonic phrase,
     /// encrypts the private key with the password, and stores/appends it in IndexedDB.
     ///
     /// **Parameters**:
-    /// - `password: Uint8Array` - The password used to decrypt the master seed and encrypt the child private key.
+    /// - `password: Uint8Array` - The password used to decrypt the mnemonic phrase and encrypt the child private key.
     ///
     /// **Returns**:
-    /// - `Result<(JsValue), JsValue>` - A JavaScript Promise that resolves to `the just-generated signer's public key` on success,
+    /// - `Result<JsValue, JsValue>` - A JavaScript Promise that resolves to the hex-encoded SPHINCS+ public key on success,
     ///   or rejects with a JavaScript error on failure.
     ///
     /// **Async**: Yes
     #[wasm_bindgen]
-    pub async fn gen_new_signer(password: Uint8Array) -> Result<JsValue, JsValue> {
+    pub async fn gen_new_key_pair(password: Uint8Array) -> Result<JsValue, JsValue> {
         let mut password = password.to_vec();
 
-        let master_seed = get_encrypted_master_seed()
+        let master_seed = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
-            .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
+            .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let mut seed = decrypt(&password, master_seed)?.to_vec();
 
-        let child_keys = Self::get_all_signer_pub().await?;
-        let child_index = child_keys.len();
-        let path = format!("pq/ckb/{}", child_index);
+        let path = format!("pq/ckb/{}", Self::get_all_sphincs_pub().await?.len());
         let mut sphincs_seed = vec![0u8; 32];
         let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
         scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
@@ -496,14 +485,12 @@ impl KeyVault {
         let mut pri_key_bytes = pri_key.into_bytes();
         let encrypted_pri = encrypt(&password, &pri_key_bytes)?;
 
-        let child_key = SphincsPlusSigner {
+        let pair = SphincsPlusKeyPair {
             pub_key: encode(pub_key.into_bytes()),
             pri_enc: encrypted_pri,
         };
 
-        add_signer(child_key)
-            .await
-            .map_err(|e| e.to_jsvalue())?;
+        add_key_pair(pair).await.map_err(|e| e.to_jsvalue())?;
 
         seed.zeroize();
         password.zeroize();
@@ -512,11 +499,11 @@ impl KeyVault {
         Ok(JsValue::from_str(&encode(pub_key_clone.into_bytes())))
     }
 
-    /// Imports a master seed by encrypting it with the provided password and storing it as the master seed.
+    /// Imports a mnemonic by encrypting it with the provided password and storing it as the mnemonic phrase.
     ///
     /// **Parameters**:
-    /// - `seed_phrase: Uint8Array` - The seed phrase utf8-encoded as Uint8Array to import.
-    /// - `password: Uint8Array` - The password used to encrypt the seed phrase.
+    /// - `seed_phrase: Uint8Array` - The mnemonic phrase as a UTF-8 encoded Uint8Array to import.
+    /// - `password: Uint8Array` - The password used to encrypt the mnemonic.
     ///
     /// **Returns**:
     /// - `Result<(), JsValue>` - A JavaScript Promise that resolves to `undefined` on success,
@@ -524,9 +511,9 @@ impl KeyVault {
     ///
     /// **Async**: Yes
     ///
-    /// **Warning**: This method is not recommended as it may expose the seed phrase in JavaScript.
+    /// **Warning**: This method is not recommended as it may expose the mnemonic in JavaScript.
     #[wasm_bindgen]
-    pub async fn import_seed(
+    pub async fn import_seed_phrase(
         seed_phrase: Uint8Array,
         password: Uint8Array,
     ) -> Result<(), JsValue> {
@@ -535,29 +522,31 @@ impl KeyVault {
         let encrypted_seed = encrypt(&password, &seed_phrase)?;
         password.zeroize();
         seed_phrase.zeroize();
-        set_encrypted_master_seed(encrypted_seed)
+        set_encrypted_mnemonic_phrase(encrypted_seed)
             .await
             .map_err(|e| e.to_jsvalue())?;
         Ok(())
     }
 
-    /// Exports the master seed by decrypting it with the provided password.
+    /// Exports the mnemonic phrase by decrypting it with the provided password.
     ///
     /// **Parameters**:
-    /// - `password: Uint8Array` - The password used to decrypt the master seed.
+    /// - `password: Uint8Array` - The password used to decrypt the mnemonic.
     ///
     /// **Returns**:
-    /// - `Result<Uint8Array, JsValue>` - A JavaScript Promise that resolves to the seed phrase as a `Uint8Array` on success,
+    /// - `Result<Uint8Array, JsValue>` - A JavaScript Promise that resolves to the mnemonic as a UTF-8 encoded `Uint8Array` on success,
     ///   or rejects with a JavaScript error on failure.
     ///
     /// **Async**: Yes
+    ///
+    /// **Warning**: Exporting the mnemonic exposes it in JavaScript, which may pose a security risk.
     #[wasm_bindgen]
-    pub async fn export_seed(password: Uint8Array) -> Result<Uint8Array, JsValue> {
+    pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
-        let encrypted_seed = get_encrypted_master_seed()
+        let encrypted_seed = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
-            .ok_or_else(|| JsValue::from_str("Master seed not found"))?;
+            .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let seed = decrypt(&password, encrypted_seed)?;
         password.zeroize();
         Ok(Uint8Array::from(seed.as_slice()))
@@ -567,14 +556,14 @@ impl KeyVault {
     ///
     /// **Parameters**:
     /// - `password: Uint8Array` - The password used to decrypt the private key.
-    /// - `sphincs_plus_pub: String` - The sphincs+ public key with which encryted privatekey will be used to sign.
+    /// - `sphincs_plus_pub: String` - The SPHINCS+ public key identifying the private key to use for signing.
     /// - `message: Uint8Array` - The message to be signed.
     ///
     /// **Returns**:
     /// - `Result<Uint8Array, JsValue>` - The signature as a `Uint8Array` on success,
     ///   or a JavaScript error on failure.
     ///
-    /// **Async**: No
+    /// **Async**: Yes
     #[wasm_bindgen]
     pub async fn sign(
         password: Uint8Array,
@@ -582,12 +571,12 @@ impl KeyVault {
         message: Uint8Array,
     ) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
-        let child_key = get_signer(&sphincs_plus_pub)
+        let pair = get_key_pair(&sphincs_plus_pub)
             .await
             .map_err(|e| e.to_jsvalue())?
             .unwrap();
 
-        let pri_key_bytes = decrypt(&password, child_key.pri_enc)?.to_vec();
+        let pri_key_bytes = decrypt(&password, pair.pri_enc)?.to_vec();
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
             &pri_key_bytes.try_into().expect("Fail to parse private key"),
         )

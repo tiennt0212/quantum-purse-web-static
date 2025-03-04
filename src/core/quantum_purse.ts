@@ -158,7 +158,7 @@ export default class QuantumPurse {
    * @remark The password should be overwritten with zeros after use.
    */
   public async genAccount(password: Uint8Array): Promise<void> {
-    const sphincs_pub = await KeyVault.gen_new_signer(password);
+    const sphincs_pub = await KeyVault.gen_new_key_pair(password);
     await this.setAccPointer(sphincs_pub);
     password.fill(0);
   }
@@ -236,7 +236,7 @@ export default class QuantumPurse {
     seedPhrase: Uint8Array,
     password: Uint8Array
   ): Promise<void> {
-    await KeyVault.import_seed(seedPhrase, password);
+    await KeyVault.import_seed_phrase(seedPhrase, password);
     password.fill(0);
     seedPhrase.fill(0);
   }
@@ -249,7 +249,7 @@ export default class QuantumPurse {
    * @remark The password is overwritten with zeros after use. Handle the returned seed carefully to avoid leakage.
    */
   public async exportSeedPhrase(password: Uint8Array): Promise<Uint8Array> {
-    const seed = await KeyVault.export_seed(password);
+    const seed = await KeyVault.export_seed_phrase(password);
     password.fill(0);
     return seed;
   }
@@ -260,6 +260,6 @@ export default class QuantumPurse {
   }
 
   public async getAllAccounts():Promise<string[]> {
-    return await KeyVault.get_all_signer_pub();
+    return await KeyVault.get_all_sphincs_pub();
   }
 }

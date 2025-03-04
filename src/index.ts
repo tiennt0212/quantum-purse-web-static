@@ -1,9 +1,15 @@
-import './styles.css';
-import Icon from './icon.png';
+import "./styles.css";
+import Icon from "./icon.png";
+import { transfer } from "./core/transaction_builder";
+import { sendTransaction } from "./core/utils";
+import { NODE_URL } from "./core/config";
+import { utf8ToBytes } from "@noble/hashes/utils";
+import QuantumPurse from "./core/quantum_purse";
+import { bytesToUtf8 } from "./core/utils";
 
 // Add title
-const text: string = 'A quantum resistant wallet for ckb blockchain';
-const $content = document.querySelector('#content');
+const text = "A quantum resistant wallet for ckb blockchain";
+const $content = document.querySelector("#content");
 if ($content) {
   $content.textContent = text;
 }
@@ -11,5 +17,37 @@ if ($content) {
 // Add the icon
 const myIcon = new Image();
 myIcon.src = Icon;
-
 document.body.appendChild(myIcon);
+
+/////////////////////////////////////////////////////////////////////
+async function run() {
+  const passwordStr = "my password is easy to crack. Don't use this!";
+  try {
+    const wallet = await QuantumPurse.getInstance();
+
+    await wallet.dbClear();
+    await wallet.init(utf8ToBytes(passwordStr)); // gen and ecrypt master seed; input password is gone frome here
+    await wallet.genAccount(utf8ToBytes(passwordStr)); // gen and encrypt a child key; input password is gone from here
+
+    const address = await wallet.getAddress(); // pointing to the previously generated account
+    console.log("address: ", address);
+
+    // get accounts list
+    const accountList = await wallet.getAllAccounts();
+    console.log("account_list: ", accountList);
+
+    // set account pointer to account 0
+    await wallet.setAccPointer(accountList[0]);
+    const newAddress = await wallet.getAddress();
+    console.log("new_address: ", newAddress);
+
+    // export to see the seed phrase
+    const seed = await wallet.exportSeedPhrase(utf8ToBytes(passwordStr)); // !! remember to clear seed !!
+    console.log("exported seed: ", bytesToUtf8(seed));
+  } catch (error) {
+    console.error("ERROR:", error);
+  }
+}
+
+run();
+/////////////////////////////////////////////////////////////////////
