@@ -35,9 +35,8 @@ import Icon from "./icon.png";
 import { transfer } from "./core/transaction_builder";
 import { sendTransaction } from "./core/utils";
 import { NODE_URL } from "./core/config";
-import { utf8ToBytes } from "@noble/hashes/utils";
 import QuantumPurse from "./core/quantum_purse";
-import { bytesToUtf8 } from "./core/utils";
+import { utf8ToBytes, bytesToUtf8 } from "./core/utils";
 
 // Add title
 const text = "A quantum resistant wallet for ckb blockchain";
@@ -76,6 +75,15 @@ async function run() {
     // export to see the seed phrase
     const seed = await wallet.exportSeedPhrase(utf8ToBytes(passwordStr)); // !! remember to clear seed !!
     console.log("exported seed: ", bytesToUtf8(seed));
+
+    // import seed phrase
+    const newPasswordStr = "my password is getting strongger, right?";
+    const newSeed = "comic betray load year input cruise output lock slender glory agree wink bleak topple wheel trigger pelican clap chat learn right situate oppose lava";
+    await wallet.importSeedPhrase(utf8ToBytes(newSeed), utf8ToBytes(newPasswordStr))
+
+    // re-export seed phrase
+    const newExportedSeed = await wallet.exportSeedPhrase(utf8ToBytes(newPasswordStr)); // !! remember to clear seed !!
+    console.log("new exported seed: ", bytesToUtf8(newExportedSeed));
   } catch (error) {
     console.error("ERROR:", error);
   }
@@ -83,5 +91,4 @@ async function run() {
 
 run();
 /////////////////////////////////////////////////////////////////////
-
 ```

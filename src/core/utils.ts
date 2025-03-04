@@ -352,6 +352,14 @@ export function uint8ArrayToHexString(arr: Uint8Array): string {
     .join('');
 }
 
+/**
+ * Convert JS string to byte array.
+ * @example utf8ToBytes('abc') // new Uint8Array([97, 98, 99])
+ */
+export function utf8ToBytes(str: string): Uint8Array {
+  if (typeof str !== 'string') throw new Error('utf8ToBytes expected string, got ' + typeof str);
+  return new Uint8Array(new TextEncoder().encode(str)); // https://bugzil.la/1681809
+}
 
 /**
  * Converts a utf8 byte encoded as uint8raay to the utf8.
