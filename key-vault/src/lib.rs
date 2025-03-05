@@ -56,10 +56,12 @@ pub struct CipherPayload {
 /// Represents a SPHINCS+ key pair with the public key and an encrypted private key.
 ///
 /// **Fields**:
+/// - `index: u32` - db addition order
 /// - `pub_key: String` - Hex-encoded SPHINCS+ public key.
 /// - `pri_enc: CipherPayload` - Encrypted SPHINCS+ private key, stored as a `CipherPayload`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SphincsPlusKeyPair {
+    index: u32,
     pub_key: String,
     pri_enc: CipherPayload,
 }
@@ -163,14 +165,15 @@ async fn get_encrypted_mnemonic_phrase() -> Result<Option<CipherPayload>, KeyVau
 /// - `Result<(), KeyVaultError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn add_key_pair(pair: SphincsPlusKeyPair) -> Result<(), KeyVaultError> {
+async fn add_key_pair(mut pair: SphincsPlusKeyPair) -> Result<(), KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readwrite)
         .build()?;
     let store = tx.object_store(CHILD_KEYS_STORE)?;
-
+    let count = store.count().await?;
+    pair.index = count as u32;
     let js_value = serde_wasm_bindgen::to_value(&pair)?;
 
     match store.add(js_value).with_key(pair.pub_key).build() {
@@ -290,7 +293,7 @@ fn gen_seed_phrase() -> Mnemonic {
 ///
 /// **Returns**:
 /// - `Result<CipherPayload, String>` - A `CipherPayload` containing the encrypted data, salt, and IV on success, or an error message on failure.
-/// 
+///
 /// Warning: Proper zeroization of passwords and inputs is the responsibility of the caller.
 fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
     let mut salt = vec![0u8; SALT_LENGTH];
@@ -328,7 +331,7 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
 ///
 /// **Returns**:
 /// - `Result<Vec<u8>, String>` - The decrypted plaintext on success, or an error message on failure.
-/// 
+///
 /// Warning: Proper zeroization of passwords and inputs is the responsibility of the caller.
 fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let salt = decode(payload.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
@@ -405,12 +408,20 @@ impl KeyVault {
         )?;
         let store = map_db_error(tx.object_store(CHILD_KEYS_STORE))?;
 
-        let iter: ArrayMapIter<JsValue> = map_db_error(store.get_all_keys().await)?;
-        let mut pub_keys = Vec::new();
+        // Retrieve all key pairs
+        let iter: ArrayMapIter<JsValue> = map_db_error(store.get_all().await)?;
+        let mut key_pairs: Vec<SphincsPlusKeyPair> = Vec::new();
         for result in iter {
             let js_value = map_db_error(result)?;
-            pub_keys.push(js_value.as_string().unwrap());
+            let pair: SphincsPlusKeyPair = serde_wasm_bindgen::from_value(js_value)?;
+            key_pairs.push(pair);
         }
+
+        // Sort by index
+        key_pairs.sort_by_key(|pair| pair.index);
+
+        // Extract public keys in sorted order
+        let pub_keys: Vec<String> = key_pairs.into_iter().map(|pair| pair.pub_key).collect();
 
         Ok(pub_keys)
     }
@@ -467,11 +478,11 @@ impl KeyVault {
     pub async fn gen_new_key_pair(password: Uint8Array) -> Result<JsValue, JsValue> {
         let mut password = password.to_vec();
 
-        let master_seed = get_encrypted_mnemonic_phrase()
+        let payload = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
-        let mut seed = decrypt(&password, master_seed)?.to_vec();
+        let mut seed = decrypt(&password, payload)?.to_vec();
 
         let path = format!("pq/ckb/{}", Self::get_all_sphincs_pub().await?.len());
         let mut sphincs_seed = vec![0u8; 32];
@@ -490,6 +501,7 @@ impl KeyVault {
         let encrypted_pri = encrypt(&password, &pri_key_bytes)?;
 
         let pair = SphincsPlusKeyPair {
+            index: 0, // Init to 0; Will be set correctly in add_key_pair
             pub_key: encode(pub_key.into_bytes()),
             pri_enc: encrypted_pri,
         };
@@ -549,11 +561,11 @@ impl KeyVault {
     #[wasm_bindgen]
     pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
         let mut password = password.to_vec();
-        let encrypted_seed = get_encrypted_mnemonic_phrase()
+        let payload = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
-        let mnemonic = decrypt(&password, encrypted_seed)?;
+        let mnemonic = decrypt(&password, payload)?;
         password.zeroize();
         Ok(Uint8Array::from(mnemonic.as_slice()))
     }
