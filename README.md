@@ -56,7 +56,7 @@ async function run() {
   try {
     const wallet = await QuantumPurse.getInstance();
 
-    await wallet.dbClear();
+    // await wallet.dbClear();
     await wallet.init(utf8ToBytes(passwordStr)); // gen and ecrypt master seed; input password is gone frome here
     await wallet.genAccount(utf8ToBytes(passwordStr)); // gen and encrypt a child key; input password is gone from here
 
@@ -69,21 +69,31 @@ async function run() {
 
     // set account pointer to account 0
     await wallet.setAccPointer(accountList[0]);
-    const newAddress = await wallet.getAddress();
-    console.log("new_address: ", newAddress);
+    const address0 = await wallet.getAddress();
+    console.log("new_address: ", address0);
+
+    // get balance
+    const balance = await wallet.getBalance();
+    console.log("balance: ", balance/100000000n, "CKB");
 
     // export to see the seed phrase
     const seed = await wallet.exportSeedPhrase(utf8ToBytes(passwordStr)); // !! remember to clear seed !!
     console.log("exported seed: ", bytesToUtf8(seed));
 
-    // import seed phrase
-    const newPasswordStr = "my password is getting strongger, right?";
-    const newSeed = "comic betray load year input cruise output lock slender glory agree wink bleak topple wheel trigger pelican clap chat learn right situate oppose lava";
-    await wallet.importSeedPhrase(utf8ToBytes(newSeed), utf8ToBytes(newPasswordStr))
+    // // import seed phrase
+    // const newPasswordStr = "my password is getting strongger, right?";
+    // const newSeed = "comic betray load year input cruise output lock slender glory agree wink bleak topple wheel trigger pelican clap chat learn right situate oppose lava";
+    // await wallet.importSeedPhrase(utf8ToBytes(newSeed), utf8ToBytes(newPasswordStr))
 
-    // re-export seed phrase
-    const newExportedSeed = await wallet.exportSeedPhrase(utf8ToBytes(newPasswordStr)); // !! remember to clear seed !!
-    console.log("new exported seed: ", bytesToUtf8(newExportedSeed));
+    // // re-export seed phrase
+    // const newExportedSeed = await wallet.exportSeedPhrase(utf8ToBytes(newPasswordStr)); // !! remember to clear seed !!
+    // console.log("new exported seed: ", bytesToUtf8(newExportedSeed));
+
+    const tx = await transfer(address0, address0, "333");
+    const signedTx = await wallet.sign(tx, utf8ToBytes(passwordStr));
+    const txId = await sendTransaction(NODE_URL, signedTx);
+    console.log("tx_id: ", txId);
+
   } catch (error) {
     console.error("ERROR:", error);
   }
