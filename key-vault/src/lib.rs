@@ -56,10 +56,12 @@ pub struct CipherPayload {
 /// Represents a SPHINCS+ key pair with the public key and an encrypted private key.
 ///
 /// **Fields**:
+/// - `index: u32` - db addition order
 /// - `pub_key: String` - Hex-encoded SPHINCS+ public key.
 /// - `pri_enc: CipherPayload` - Encrypted SPHINCS+ private key, stored as a `CipherPayload`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SphincsPlusKeyPair {
+    index: u32,
     pub_key: String,
     pri_enc: CipherPayload,
 }
@@ -163,13 +165,15 @@ async fn get_encrypted_mnemonic_phrase() -> Result<Option<CipherPayload>, KeyVau
 /// - `Result<(), KeyVaultError>` - Ok on success, or an error if storage fails.
 ///
 /// **Async**: Yes
-async fn add_key_pair(pair: SphincsPlusKeyPair) -> Result<(), KeyVaultError> {
+async fn add_key_pair(mut pair: SphincsPlusKeyPair) -> Result<(), KeyVaultError> {
     let db = open_db().await?;
     let tx = db
         .transaction(CHILD_KEYS_STORE)
         .with_mode(TransactionMode::Readwrite)
         .build()?;
     let store = tx.object_store(CHILD_KEYS_STORE)?;
+    let count = store.count().await?;
+    pair.index = count as u32;
 
     let js_value = serde_wasm_bindgen::to_value(&pair)?;
 
@@ -396,7 +400,7 @@ impl KeyVault {
         fn map_db_error<T>(result: Result<T, DBError>) -> Result<T, JsValue> {
             result.map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))
         }
-
+    
         let db = open_db().await.map_err(|e| e.to_jsvalue())?;
         let tx = map_db_error(
             db.transaction(CHILD_KEYS_STORE)
@@ -404,14 +408,22 @@ impl KeyVault {
                 .build(),
         )?;
         let store = map_db_error(tx.object_store(CHILD_KEYS_STORE))?;
-
-        let iter: ArrayMapIter<JsValue> = map_db_error(store.get_all_keys().await)?;
-        let mut pub_keys = Vec::new();
+    
+        // Retrieve all key pairs
+        let iter: ArrayMapIter<JsValue> = map_db_error(store.get_all().await)?;
+        let mut key_pairs: Vec<SphincsPlusKeyPair> = Vec::new();
         for result in iter {
             let js_value = map_db_error(result)?;
-            pub_keys.push(js_value.as_string().unwrap());
+            let pair: SphincsPlusKeyPair = serde_wasm_bindgen::from_value(js_value)?;
+            key_pairs.push(pair);
         }
-
+    
+        // Sort by index
+        key_pairs.sort_by_key(|pair| pair.index);
+    
+        // Extract public keys in sorted order
+        let pub_keys: Vec<String> = key_pairs.into_iter().map(|pair| pair.pub_key).collect();
+    
         Ok(pub_keys)
     }
 
@@ -490,6 +502,7 @@ impl KeyVault {
         let encrypted_pri = encrypt(&password, &pri_key_bytes)?;
 
         let pair = SphincsPlusKeyPair {
+            index: 0, // Init to 0; Will be set correctly in add_key_pair
             pub_key: encode(pub_key.into_bytes()),
             pri_enc: encrypted_pri,
         };
