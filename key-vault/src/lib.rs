@@ -434,7 +434,7 @@ impl KeyVault {
             .await
             .map_err(|e| e.to_jsvalue())?;
         if stored_seed.is_some() {
-            debug!("[INFO]: Mnemonic phrase already exists");
+            debug!("[INFO]: Mnemonic phrase exists");
             Ok(())
         } else {
             let mut mnemonic = gen_seed_phrase();
