@@ -8,6 +8,7 @@ pub enum KeyVaultError {
     DatabaseError(String),
 }
 
+// todo remove
 impl fmt::Display for KeyVaultError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

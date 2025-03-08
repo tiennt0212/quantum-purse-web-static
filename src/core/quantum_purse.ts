@@ -21,11 +21,8 @@ import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
 import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
-import __wbg_init, {
-  KeyVault,
-} from "../../key-vault/pkg/key_vault";
-
-const { ckbHash } = utils;
+import __wbg_init, { KeyVault } from "../../key-vault/pkg/key_vault";
+import { CKBSphincsPlusHasher, ckbSpxHash } from "./ckb_spx_hasher";
 
 /**
  * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple)
@@ -35,8 +32,15 @@ const { ckbHash } = utils;
  * managing seed phrases, and interacting with the blockchain.
  */
 export default class QuantumPurse {
-  static readonly SPX_SIG_LEN: number = 17088; // SPHINCS+ signature length
-  private accountPointer?: string; // sphincs+ public key corresponding to the encrypted private key in DB
+  // all in one lock script configuration
+  private MULTISIG_ID = "80";
+  private REQUIRE_FISRT_N = "00";
+  private THRESHOLD = "01";
+  private PUBKEY_NUM = "01";
+  private FLAG = "6d";
+
+  static readonly SPX_SIG_LEN: number = 17088; // sphincs+ shake-128f simple signature len
+  public accountPointer?: string; // sphincs+ public key corresponding to the encrypted private key in DB
   private static instance: QuantumPurse | null = null; // Singleton instance
 
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
@@ -44,6 +48,13 @@ export default class QuantumPurse {
   /** Constructor that takes sphincs+ on-chain binary deployment info */
   private constructor(sphincsCodeHash: string, sphincsHashType: HashType) {
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
+  }
+
+  // conjugate the first 4 bytes of the witness.lock for the hasher
+  private spxAllInOneSetupHashInput(): string {
+    return (
+      this.MULTISIG_ID + this.REQUIRE_FISRT_N + this.THRESHOLD + this.PUBKEY_NUM
+    );
   }
 
   /**
@@ -62,12 +73,18 @@ export default class QuantumPurse {
   }
 
   /** Generates the ckb lock script for the current signer. */
-  private getLock(): Script {
-    if (!this.accountPointer) throw new Error("Signer not available!");
+  public getLock(): Script {
+    if (!this.accountPointer) throw new Error("Signer not available!"); //todo improve message
+
+    const hasher = new CKBSphincsPlusHasher();
+    hasher.update("0x" + this.spxAllInOneSetupHashInput());
+    hasher.update("0x" + ((parseInt(this.FLAG, 16) >> 1) << 1).toString(16).padStart(2, '0'));
+    hasher.update("0x" + this.accountPointer);
+    
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
-      args: ckbHash("0x" + this.accountPointer),
+      args: hasher.digestHex(),
     };
   }
 
@@ -119,19 +136,26 @@ export default class QuantumPurse {
 
     const witnessLen =
       QuantumPurse.SPX_SIG_LEN +
-      hexStringToUint8Array(this.accountPointer).length;
+      hexStringToUint8Array(this.accountPointer).length; // todo improve
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
     const signingEntries = tx.get("signingEntries").toArray();
 
-    const signature = await KeyVault.sign(password, this.accountPointer, hexStringToUint8Array(signingEntries[0].message));
+    const spxSig = await KeyVault.sign(
+      password,
+      this.accountPointer,
+      hexStringToUint8Array(signingEntries[0].message)
+    );
+    const serializedSpxSig = new Reader(spxSig.buffer).serializeJson();
 
-    const serializedSignature = new Reader(signature.buffer).serializeJson();
-
-    const witness =
-      serializedSignature + this.accountPointer.replace(/^0x/, "");
-    return sealTransaction(tx, [witness]);
+    const fullCkbQrSig =
+      "0x" +
+      this.spxAllInOneSetupHashInput() +
+      this.FLAG +
+      this.accountPointer +
+      serializedSpxSig.replace(/^0x/, "");
+    return sealTransaction(tx, [fullCkbQrSig]);
   }
 
   /**
@@ -169,8 +193,7 @@ export default class QuantumPurse {
    */
   public async setAccPointer(accPointer: string): Promise<void> {
     const accList = await this.getAllAccounts();
-    if (!accList.includes(accPointer))
-      throw(Error("Invalid account pointer"));
+    if (!accList.includes(accPointer)) throw Error("Invalid account pointer"); //todo
     this.accountPointer = accPointer;
   }
 
@@ -253,13 +276,22 @@ export default class QuantumPurse {
     password.fill(0);
     return seed;
   }
-  
-  public async init(password: Uint8Array) {
+
+  /**
+   * QuantumPurse wallet initialization for the master seed phrase.
+   * @param password - The password to decrypt the seed (will be zeroed out).
+   * @remark The password is overwritten with zeros after use. Handle the returned seed carefully to avoid leakage.
+   */
+  public async init(password: Uint8Array): Promise<void> {
     await KeyVault.key_init(password);
     password.fill(0);
   }
 
-  public async getAllAccounts():Promise<string[]> {
+  /**
+   * Retrieve all sphincs plus public keys from all child accounts in the indexed DB.
+   * @returns An ordered array of all child key's sphincs plus public keys.
+   */
+  public async getAllAccounts(): Promise<string[]> {
     return await KeyVault.get_all_sphincs_pub();
   }
 }

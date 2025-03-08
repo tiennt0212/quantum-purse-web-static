@@ -15,6 +15,8 @@ import { BI } from "@ckb-lumos/bi";
 import { bytes } from "@ckb-lumos/codec";
 import { SPHINCSPLUS_LOCK } from "./config";
 import { RPC } from "@ckb-lumos/rpc";
+import QuantumPurse from "./quantum_purse";
+import { KeyVault } from "../../key-vault/pkg/key_vault";
 
 /**
  * Converts a hexadecimal string to a BigInt number, handling both positive and negative values.
@@ -84,31 +86,6 @@ export function fetch(
 }
 
 /**
- * Hashes the length of a witness and the witness itself for signing purposes.
- * @param hasher - An object with an update method for hashing data.
- * @param witness - The witness to hash as a HexString.
- */
-function hashWitness(
-  hasher: { update: (value: HexString | ArrayBuffer) => unknown },
-  witness: HexString
-): void {
-  const lengthBuffer = new ArrayBuffer(8);
-  const view = new DataView(lengthBuffer);
-  const witnessHexString = BI.from(bytes.bytify(witness).length).toString(16);
-  if (witnessHexString.length <= 8) {
-    view.setUint32(0, Number("0x" + witnessHexString), true);
-    view.setUint32(4, Number("0x" + "00000000"), true);
-  }
-
-  if (witnessHexString.length > 8 && witnessHexString.length <= 16) {
-    view.setUint32(0, Number("0x" + witnessHexString.slice(-8)), true);
-    view.setUint32(4, Number("0x" + witnessHexString.slice(0, -8)), true);
-  }
-  hasher.update(lengthBuffer);
-  hasher.update(witness);
-}
-
-/**
  * Inserts placeholder witnesses into a transaction skeleton for SPHINCS+ signatures.
  * @param transaction - The transaction skeleton to modify.
  * @param spSigSize - The size of the SPHINCS+ signature in bytes.
@@ -135,7 +112,7 @@ export function insertWitnessPlaceHolder(
         input.cellOutput.lock.hashType === SPHINCSPLUS_LOCK.hashType &&
         input.cellOutput.lock.codeHash === SPHINCSPLUS_LOCK.codeHash
       )
-        witness = "0x" + "0".repeat(spSigSize * 2);
+        witness = "0x" + "0".repeat(spSigSize * 2); //todo check with msg hash all
     }
 
     witness = bytes.hexify(blockchain.WitnessArgs.pack({ lock: witness }));
@@ -143,6 +120,107 @@ export function insertWitnessPlaceHolder(
   }
 
   return transaction;
+}
+
+/**
+ * https://github.com/xxuejie/rfcs/blob/cighash-all/rfcs/0000-ckb-tx-message-all/0000-ckb-tx-message-all.md
+ * @param tx - The transaction skeleton to process.
+ * @returns An Uint8Array representing the transaction message all hash.
+ */
+function get_ckb_tx_message_all(tx: TransactionSkeletonType): Uint8Array {
+
+  // Prepare mock transaction
+  const tx_mock = {
+    version: "0x0",
+    cell_deps: tx.cellDeps.map(dep => ({
+      out_point: {
+        tx_hash: dep.outPoint.txHash,
+        index: dep.outPoint.index
+      },
+      dep_type: dep.depType
+    })),
+    header_deps: tx.headerDeps,
+    inputs: tx.inputs.map(input => ({
+      previous_output: {
+        tx_hash: input.outPoint!.txHash,
+        index: input.outPoint!.index
+      },
+      since: "0x0"
+    })),
+    outputs: tx.outputs.map(output => ({
+      capacity: output.cellOutput.capacity,
+      lock: {
+        code_hash: output.cellOutput.lock.codeHash,
+        hash_type: output.cellOutput.lock.hashType,
+        args: output.cellOutput.lock.args
+      },
+      type: output.cellOutput.type
+    })),
+    outputs_data: tx.outputs.map(output => output.data),
+    witnesses: tx.witnesses
+  };
+
+  // Prepare mockInputs for mock_info.inputs
+  const mockInputs = tx.inputs.map(input => ({
+    input: {
+      previous_output: {
+        tx_hash: input.outPoint!.txHash,
+        index: input.outPoint!.index
+      },
+      since: "0x0"
+    },
+    output: {
+      capacity: input.cellOutput.capacity,
+      lock: {
+        code_hash: input.cellOutput.lock.codeHash,
+        hash_type: input.cellOutput.lock.hashType,
+        args: input.cellOutput.lock.args
+      },
+      type: input.cellOutput.type
+    },
+    data: input.data,
+    header: null
+  }));
+
+  const defaultCellOutput = {
+    capacity: "0x0",
+    lock: {
+      code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000", // todo check
+      hash_type: "data",
+      args: "0x"
+    },
+    type: null
+  };
+
+  const mockCellDeps = tx.cellDeps.map(dep => ({
+    cell_dep: {
+      out_point: {
+        tx_hash: dep.outPoint.txHash,
+        index: dep.outPoint.index
+      },
+      dep_type: dep.depType
+    },
+    output: defaultCellOutput,
+    data: "0x",
+    header: null
+  }));
+
+  // Prepare mock_info
+  const mockInfo = {
+    inputs: mockInputs,
+    cell_deps: mockCellDeps,
+    header_deps: []
+  };
+
+  // Prepare reprMockTx
+  const reprMockTx = {
+    mock_info: mockInfo,
+    tx: tx_mock
+  };
+
+  // Serialize to JSON string and call the rust tool
+  const serializedTx = new TextEncoder().encode(JSON.stringify(reprMockTx));
+  return KeyVault.get_ckb_tx_message_all(new Uint8Array(serializedTx));
 }
 
 /**
@@ -154,46 +232,16 @@ export function prepareSphincsPlusSigningEntries(
   txSkeleton: TransactionSkeletonType
 ): TransactionSkeletonType {
   let processedArgs = Set<string>();
-  const tx = createTransactionFromSkeleton(txSkeleton);
-  const txHash = ckbHash(blockchain.RawTransaction.pack(tx));
   const inputs = txSkeleton.get("inputs");
-  const witnesses = txSkeleton.get("witnesses");
   let signingEntries = txSkeleton.get("signingEntries");
   for (let i = 0; i < inputs.size; i++) {
     const input = inputs.get(i)!;
     if (!processedArgs.has(input.cellOutput.lock.args)) {
       processedArgs = processedArgs.add(input.cellOutput.lock.args);
-      const lockValue = new values.ScriptValue(input.cellOutput.lock, {
-        validate: false,
-      });
-      const hasher = new CKBHasher();
-      hasher.update(txHash);
-      if (i >= witnesses.size) {
-        throw new Error(
-          `The first witness in the script group starting at input index ${i} does not exist,\
-           maybe some other part has invalidly tampered the transaction?`
-        );
-      }
-      hashWitness(hasher, witnesses.get(i)!);
-      for (let j = i + 1; j < inputs.size && j < witnesses.size; j++) {
-        const otherInput = inputs.get(j)!;
-        if (
-          lockValue.equals(
-            new values.ScriptValue(otherInput.cellOutput.lock, {
-              validate: false,
-            })
-          )
-        ) {
-          hashWitness(hasher, witnesses.get(j)!);
-        }
-      }
-      for (let j = inputs.size; j < witnesses.size; j++) {
-        hashWitness(hasher, witnesses.get(j)!);
-      }
       const signingEntry = {
         type: "witness_args_lock",
         index: i,
-        message: hasher.digestHex(),
+        message: uint8ArrayToHexString(get_ckb_tx_message_all(txSkeleton)),
       };
       signingEntries = signingEntries.push(signingEntry);
     }

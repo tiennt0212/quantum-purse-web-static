@@ -14,6 +14,11 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use bip39::{Language, Mnemonic};
+use ckb_fips205_utils::{
+    ckb_tx_message_all_from_mock_tx::generate_ckb_tx_message_all_from_mock_tx,
+    ckb_tx_message_all_from_mock_tx::ScriptOrIndex, signing::Shake128F, Hasher,
+};
+use ckb_mock_tx_types::{MockTransaction, ReprMockTransaction};
 use fips205::slh_dsa_shake_128f;
 use fips205::traits::{SerDes, Signer};
 use getrandom::getrandom;
@@ -604,5 +609,24 @@ impl KeyVault {
         password.zeroize();
         signing_key.zeroize();
         Ok(Uint8Array::from(signature.as_slice()))
+    }
+
+    #[wasm_bindgen]
+    pub fn get_ckb_tx_message_all(serialized_mock_tx: Uint8Array) -> Result<Uint8Array, JsValue> {
+        let serialized_bytes = serialized_mock_tx.to_vec();
+        let repr_mock_tx: ReprMockTransaction = serde_json::from_slice(&serialized_bytes)
+            .map_err(|e| JsValue::from_str(&format!("Deserialization error: {}", e)))?;
+
+        let mock_tx: MockTransaction = repr_mock_tx.into();
+
+        let mut message_hasher = Hasher::message_hasher();
+        let _ = generate_ckb_tx_message_all_from_mock_tx(
+            &mock_tx,
+            ScriptOrIndex::Index(0),
+            &mut message_hasher,
+        )
+        .map_err(|e| JsValue::from_str(&format!("CKB_TX_MESSAGE_ALL error: {:?}", e)))?;
+        let message = message_hasher.hash();
+        Ok(Uint8Array::from(message.as_slice()))
     }
 }
