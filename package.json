@@ -4,7 +4,7 @@
   "description": "ckb quantum resistant wallet",
   "private": true,
   "scripts": {
-    "start": "webpack serve --open --config ./webpack/webpack.dev.js",
+    "start": "webpack serve --config ./webpack/webpack.dev.js",
     "build:wasm": "cd key-vault && wasm-pack build --release --target web",
     "build:webpack": "webpack --config ./webpack/webpack.prod.js",
     "build": "npm run build:wasm && npm run build:webpack",
@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@peculiar/webcrypto": "^1.5.0",
+    "@pmmmwh/react-refresh-webpack-plugin": "^0.5.15",
     "@types/jest": "^29.5.14",
     "@types/react": "^18.2.64",
     "@types/react-dom": "^18.2.21",
@@ -29,6 +30,7 @@
     "fake-indexeddb": "^6.0.0",
     "gh-pages": "^3.1.0",
     "html-webpack-plugin": "^5.3.1",
+    "react-refresh": "^0.16.0",
     "sass": "^1.85.1",
     "sass-loader": "^16.0.5",
     "style-loader": "^2.0.0",
@@ -39,7 +41,7 @@
     "typescript": "^4.2.3",
     "webpack": "^5.27.1",
     "webpack-cli": "^4.5.0",
-    "webpack-dev-server": "^3.11.2",
+    "webpack-dev-server": "^4.15.2",
     "webpack-merge": "^5.7.3"
   },
   "dependencies": {
