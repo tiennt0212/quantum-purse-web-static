@@ -1,22 +1,11 @@
-import {
-  utils,
-  blockchain,
-  HexString,
-  values,
-  Transaction,
-} from "@ckb-lumos/base";
-const { ckbHash, CKBHasher, computeScriptHash } = utils;
-import {
-  TransactionSkeletonType,
-  createTransactionFromSkeleton,
-} from "@ckb-lumos/helpers";
+import { utils, blockchain, Transaction } from "@ckb-lumos/base";
+const { computeScriptHash } = utils; //todo improve. misused but still fulfill what needs to be done
+import { TransactionSkeletonType } from "@ckb-lumos/helpers";
 import { Set } from "immutable";
-import { BI } from "@ckb-lumos/bi";
 import { bytes } from "@ckb-lumos/codec";
 import { SPHINCSPLUS_LOCK } from "./config";
 import { RPC } from "@ckb-lumos/rpc";
-import QuantumPurse from "./quantum_purse";
-import { KeyVault } from "../../key-vault/pkg/key_vault";
+import { Util as KeyVaultUtil } from "../../key-vault/pkg/key_vault";
 
 /**
  * Converts a hexadecimal string to a BigInt number, handling both positive and negative values.
@@ -127,100 +116,100 @@ export function insertWitnessPlaceHolder(
  * @param tx - The transaction skeleton to process.
  * @returns An Uint8Array representing the transaction message all hash.
  */
-function get_ckb_tx_message_all(tx: TransactionSkeletonType): Uint8Array {
-
+function get_ckb_tx_message_all_hash(tx: TransactionSkeletonType): Uint8Array {
   // Prepare mock transaction
   const tx_mock = {
     version: "0x0",
-    cell_deps: tx.cellDeps.map(dep => ({
+    cell_deps: tx.cellDeps.map((dep) => ({
       out_point: {
         tx_hash: dep.outPoint.txHash,
-        index: dep.outPoint.index
+        index: dep.outPoint.index,
       },
-      dep_type: dep.depType
+      dep_type: dep.depType,
     })),
     header_deps: tx.headerDeps,
-    inputs: tx.inputs.map(input => ({
+    inputs: tx.inputs.map((input) => ({
       previous_output: {
         tx_hash: input.outPoint!.txHash,
-        index: input.outPoint!.index
+        index: input.outPoint!.index,
       },
-      since: "0x0"
+      since: "0x0",
     })),
-    outputs: tx.outputs.map(output => ({
+    outputs: tx.outputs.map((output) => ({
       capacity: output.cellOutput.capacity,
       lock: {
         code_hash: output.cellOutput.lock.codeHash,
         hash_type: output.cellOutput.lock.hashType,
-        args: output.cellOutput.lock.args
+        args: output.cellOutput.lock.args,
       },
-      type: output.cellOutput.type
+      type: output.cellOutput.type,
     })),
-    outputs_data: tx.outputs.map(output => output.data),
-    witnesses: tx.witnesses
+    outputs_data: tx.outputs.map((output) => output.data),
+    witnesses: tx.witnesses,
   };
 
   // Prepare mockInputs for mock_info.inputs
-  const mockInputs = tx.inputs.map(input => ({
+  const mockInputs = tx.inputs.map((input) => ({
     input: {
       previous_output: {
         tx_hash: input.outPoint!.txHash,
-        index: input.outPoint!.index
+        index: input.outPoint!.index,
       },
-      since: "0x0"
+      since: "0x0",
     },
     output: {
       capacity: input.cellOutput.capacity,
       lock: {
         code_hash: input.cellOutput.lock.codeHash,
         hash_type: input.cellOutput.lock.hashType,
-        args: input.cellOutput.lock.args
+        args: input.cellOutput.lock.args,
       },
-      type: input.cellOutput.type
+      type: input.cellOutput.type,
     },
     data: input.data,
-    header: null
+    header: null,
   }));
 
   const defaultCellOutput = {
     capacity: "0x0",
     lock: {
-      code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000", // todo check
+      code_hash:
+        "0x0000000000000000000000000000000000000000000000000000000000000000", // todo check with msg hash all
       hash_type: "data",
-      args: "0x"
+      args: "0x",
     },
-    type: null
+    type: null,
   };
 
-  const mockCellDeps = tx.cellDeps.map(dep => ({
+  const mockCellDeps = tx.cellDeps.map((dep) => ({
     cell_dep: {
       out_point: {
         tx_hash: dep.outPoint.txHash,
-        index: dep.outPoint.index
+        index: dep.outPoint.index,
       },
-      dep_type: dep.depType
+      dep_type: dep.depType,
     },
     output: defaultCellOutput,
     data: "0x",
-    header: null
+    header: null,
   }));
 
   // Prepare mock_info
   const mockInfo = {
     inputs: mockInputs,
     cell_deps: mockCellDeps,
-    header_deps: []
+    header_deps: [],
   };
 
   // Prepare reprMockTx
   const reprMockTx = {
     mock_info: mockInfo,
-    tx: tx_mock
+    tx: tx_mock,
   };
 
   // Serialize to JSON string and call the rust tool
   const serializedTx = new TextEncoder().encode(JSON.stringify(reprMockTx));
-  return KeyVault.get_ckb_tx_message_all(new Uint8Array(serializedTx));
+  return KeyVaultUtil.get_ckb_tx_message_all(new Uint8Array(serializedTx));
 }
 
 /**
@@ -241,7 +230,7 @@ export function prepareSphincsPlusSigningEntries(
       const signingEntry = {
         type: "witness_args_lock",
         index: i,
-        message: uint8ArrayToHexString(get_ckb_tx_message_all(txSkeleton)),
+        message: uint8ArrayToHexString(get_ckb_tx_message_all_hash(txSkeleton)),
       };
       signingEntries = signingEntries.push(signingEntry);
     }
@@ -395,9 +384,12 @@ export function hexStringToUint8Array(hex: string): Uint8Array {
  * @returns A hex string.
  */
 export function uint8ArrayToHexString(arr: Uint8Array): string {
-  return "0x" + Array.from(arr)
-    .map(byte => byte.toString(16).padStart(2, '0'))
-    .join('');
+  return (
+    "0x" +
+    Array.from(arr)
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+  );
 }
 
 /**
@@ -405,7 +397,8 @@ export function uint8ArrayToHexString(arr: Uint8Array): string {
  * @example utf8ToBytes('abc') // new Uint8Array([97, 98, 99])
  */
 export function utf8ToBytes(str: string): Uint8Array {
-  if (typeof str !== 'string') throw new Error('utf8ToBytes expected string, got ' + typeof str);
+  if (typeof str !== "string")
+    throw new Error("utf8ToBytes expected string, got " + typeof str);
   return new Uint8Array(new TextEncoder().encode(str)); // https://bugzil.la/1681809
 }
 
@@ -416,8 +409,8 @@ export function utf8ToBytes(str: string): Uint8Array {
  */
 export function bytesToUtf8(bytes: Uint8Array): string {
   if (!(bytes instanceof Uint8Array)) {
-    throw new Error('bytesToUtf8 expected Uint8Array, got ' + typeof bytes);
+    throw new Error("bytesToUtf8 expected Uint8Array, got " + typeof bytes);
   }
-  const decoder = new TextDecoder('utf-8');
+  const decoder = new TextDecoder("utf-8");
   return decoder.decode(bytes);
 }

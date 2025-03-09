@@ -10,7 +10,6 @@ import {
   insertWitnessPlaceHolder,
   prepareSphincsPlusSigningEntries,
   hexStringToUint8Array,
-  uint8ArrayToHexString,
 } from "./utils";
 import { Reader } from "ckb-js-toolkit";
 import { scriptToAddress } from "@nervosnetwork/ckb-sdk-utils";
@@ -20,9 +19,8 @@ import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
 import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
-import { slh_dsa_shake_128f } from "@noble/post-quantum/slh-dsa";
 import __wbg_init, { KeyVault } from "../../key-vault/pkg/key_vault";
-import { CKBSphincsPlusHasher, ckbSpxHash } from "./ckb_spx_hasher";
+import { CKBSphincsPlusHasher } from "./ckb_spx_hasher";
 
 /**
  * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple)
@@ -72,9 +70,9 @@ export default class QuantumPurse {
     return QuantumPurse.instance;
   }
 
-  /** Generates the ckb lock script for the current signer. */
+  /** Generates the ckb lock script for the current account. */
   public getLock(): Script {
-    if (!this.accountPointer) throw new Error("Signer not available!"); //todo improve message
+    if (!this.accountPointer) throw new Error("Account pointer not available!");
 
     const hasher = new CKBSphincsPlusHasher();
     hasher.update("0x" + this.spxAllInOneSetupHashInput());
@@ -89,9 +87,9 @@ export default class QuantumPurse {
   }
 
   /**
-   * Gets the blockchain address for the current signer.
+   * Gets the blockchain address for the current account.
    * @returns The CKB address as a string.
-   * @throws Error if no signer is set (see `getLock` for details).
+   * @throws Error if no account is set (see `getLock` for details).
    */
   public getAddress(): string {
     const lock = this.getLock();
@@ -101,7 +99,7 @@ export default class QuantumPurse {
   /**
    * Calculates the wallet's balance on the Nervos CKB blockchain.
    * @returns A promise resolving to the balance in BigInt (in shannons).
-   * @throws Error if no signer is set (see `getLock` for details).
+   * @throws Error if no account is set (see `getLock` for details).
    */
   public async getBalance(): Promise<bigint> {
     const query: CKBIndexerQueryOptions = {
@@ -125,18 +123,18 @@ export default class QuantumPurse {
    * @param tx - The transaction skeleton to sign.
    * @param password - The password to decrypt the private key (will be zeroed out after use).
    * @returns A promise resolving to the signed transaction.
-   * @throws Error if no signer is set or decryption fails.
+   * @throws Error if no account is set or decryption fails.
    * @remark The password and sensitive data are overwritten with zeros after use.
    */
   public async sign(
     tx: TransactionSkeletonType,
     password: Uint8Array
   ): Promise<Transaction> {
-    if (!this.accountPointer) throw new Error("Signer not available!");
+    if (!this.accountPointer) throw new Error("Account pointer not available!");
 
     const witnessLen =
       QuantumPurse.SPX_SIG_LEN +
-      hexStringToUint8Array(this.accountPointer).length; // todo improve
+      hexStringToUint8Array(this.accountPointer).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
@@ -175,7 +173,7 @@ export default class QuantumPurse {
   }
 
   /**
-   * Generates a new account derived from the master seed and sets it as the current signer.
+   * Generates a new account derived from the master seed and sets it as the current account.
    * @param password - The password to decrypt the master seed and encrypt the child key (will be zeroed out).
    * @returns A promise that resolves when the account is generated and set.
    * @throws Error if the master seed is not found or decryption fails.
@@ -193,7 +191,7 @@ export default class QuantumPurse {
    */
   public async setAccPointer(accPointer: string): Promise<void> {
     const accList = await this.getAllAccounts();
-    if (!accList.includes(accPointer)) throw Error("Invalid account pointer"); //todo
+    if (!accList.includes(accPointer)) throw Error("Invalid account pointer");
     this.accountPointer = accPointer;
   }
 

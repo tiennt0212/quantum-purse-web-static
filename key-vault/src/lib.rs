@@ -71,9 +71,13 @@ pub struct SphincsPlusKeyPair {
     pri_enc: CipherPayload,
 }
 
-/// Main struct for managing authentication keys in WebAssembly.
+/// Creating a namespace in js side for key-vault functions.
 #[wasm_bindgen]
 pub struct KeyVault;
+
+/// Creating a namespace in js side for get_ckb_tx_message_all
+#[wasm_bindgen]
+pub struct Util;
 
 // Constants
 const SALT_LENGTH: usize = 16; // 128-bit salt
@@ -362,6 +366,36 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
 }
 
 #[wasm_bindgen]
+impl Util {
+    /// https://github.com/xxuejie/rfcs/blob/cighash-all/rfcs/0000-ckb-tx-message-all/0000-ckb-tx-message-all.md.
+    ///
+    /// **Parameters**:
+    /// - `serialized_mock_tx: Uint8Array` - serialized CKB mock transaction.
+    ///
+    /// **Returns**:
+    /// - `Result<Uint8Array, JsValue>` - The CKB transaction message all hash digest as a `Uint8Array` on success,
+    ///   or a JavaScript error on failure.
+    ///
+    /// **Async**: no
+    #[wasm_bindgen]
+    pub fn get_ckb_tx_message_all(serialized_mock_tx: Uint8Array) -> Result<Uint8Array, JsValue> {
+        let serialized_bytes = serialized_mock_tx.to_vec();
+        let repr_mock_tx: ReprMockTransaction = serde_json::from_slice(&serialized_bytes)
+            .map_err(|e| JsValue::from_str(&format!("Deserialization error: {}", e)))?;
+        let mock_tx: MockTransaction = repr_mock_tx.into();
+        let mut message_hasher = Hasher::message_hasher();
+        let _ = generate_ckb_tx_message_all_from_mock_tx(
+            &mock_tx,
+            ScriptOrIndex::Index(0),
+            &mut message_hasher,
+        )
+        .map_err(|e| JsValue::from_str(&format!("CKB_TX_MESSAGE_ALL error: {:?}", e)))?;
+        let message = message_hasher.hash();
+        Ok(Uint8Array::from(message.as_slice()))
+    }
+}
+
+#[wasm_bindgen]
 impl KeyVault {
     /// Constructs a new `KeyVault`. Stateless and serves as a namespace only.
     ///
@@ -609,24 +643,5 @@ impl KeyVault {
         password.zeroize();
         signing_key.zeroize();
         Ok(Uint8Array::from(signature.as_slice()))
-    }
-
-    #[wasm_bindgen]
-    pub fn get_ckb_tx_message_all(serialized_mock_tx: Uint8Array) -> Result<Uint8Array, JsValue> {
-        let serialized_bytes = serialized_mock_tx.to_vec();
-        let repr_mock_tx: ReprMockTransaction = serde_json::from_slice(&serialized_bytes)
-            .map_err(|e| JsValue::from_str(&format!("Deserialization error: {}", e)))?;
-
-        let mock_tx: MockTransaction = repr_mock_tx.into();
-
-        let mut message_hasher = Hasher::message_hasher();
-        let _ = generate_ckb_tx_message_all_from_mock_tx(
-            &mock_tx,
-            ScriptOrIndex::Index(0),
-            &mut message_hasher,
-        )
-        .map_err(|e| JsValue::from_str(&format!("CKB_TX_MESSAGE_ALL error: {:?}", e)))?;
-        let message = message_hasher.hash();
-        Ok(Uint8Array::from(message.as_slice()))
     }
 }
