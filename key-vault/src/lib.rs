@@ -14,6 +14,11 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use bip39::{Language, Mnemonic};
+use ckb_fips205_utils::{
+    ckb_tx_message_all_from_mock_tx::generate_ckb_tx_message_all_from_mock_tx,
+    ckb_tx_message_all_from_mock_tx::ScriptOrIndex, signing::Shake128F, Hasher,
+};
+use ckb_mock_tx_types::{MockTransaction, ReprMockTransaction};
 use fips205::slh_dsa_shake_128f;
 use fips205::traits::{SerDes, Signer};
 use getrandom::getrandom;
@@ -66,9 +71,13 @@ pub struct SphincsPlusKeyPair {
     pri_enc: CipherPayload,
 }
 
-/// Main struct for managing authentication keys in WebAssembly.
+/// Creating a namespace in js side for key-vault functions.
 #[wasm_bindgen]
 pub struct KeyVault;
+
+/// Creating a namespace in js side for get_ckb_tx_message_all
+#[wasm_bindgen]
+pub struct Util;
 
 // Constants
 const SALT_LENGTH: usize = 16; // 128-bit salt
@@ -357,6 +366,36 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
 }
 
 #[wasm_bindgen]
+impl Util {
+    /// https://github.com/xxuejie/rfcs/blob/cighash-all/rfcs/0000-ckb-tx-message-all/0000-ckb-tx-message-all.md.
+    ///
+    /// **Parameters**:
+    /// - `serialized_mock_tx: Uint8Array` - serialized CKB mock transaction.
+    ///
+    /// **Returns**:
+    /// - `Result<Uint8Array, JsValue>` - The CKB transaction message all hash digest as a `Uint8Array` on success,
+    ///   or a JavaScript error on failure.
+    ///
+    /// **Async**: no
+    #[wasm_bindgen]
+    pub fn get_ckb_tx_message_all(serialized_mock_tx: Uint8Array) -> Result<Uint8Array, JsValue> {
+        let serialized_bytes = serialized_mock_tx.to_vec();
+        let repr_mock_tx: ReprMockTransaction = serde_json::from_slice(&serialized_bytes)
+            .map_err(|e| JsValue::from_str(&format!("Deserialization error: {}", e)))?;
+        let mock_tx: MockTransaction = repr_mock_tx.into();
+        let mut message_hasher = Hasher::message_hasher();
+        let _ = generate_ckb_tx_message_all_from_mock_tx(
+            &mock_tx,
+            ScriptOrIndex::Index(0),
+            &mut message_hasher,
+        )
+        .map_err(|e| JsValue::from_str(&format!("CKB_TX_MESSAGE_ALL error: {:?}", e)))?;
+        let message = message_hasher.hash();
+        Ok(Uint8Array::from(message.as_slice()))
+    }
+}
+
+#[wasm_bindgen]
 impl KeyVault {
     /// Constructs a new `KeyVault`. Stateless and serves as a namespace only.
     ///
@@ -484,7 +523,7 @@ impl KeyVault {
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let mut seed = decrypt(&password, payload)?.to_vec();
 
-        let path = format!("pq/ckb/{}", Self::get_all_sphincs_pub().await?.len());
+        let path = format!("ckb/quantum-purse/sphincs-plus/{}", Self::get_all_sphincs_pub().await?.len());
         let mut sphincs_seed = vec![0u8; 32];
         let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
         scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
