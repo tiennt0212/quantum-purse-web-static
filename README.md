@@ -1,6 +1,11 @@
 # QuantumPurse
 A CKB quantum resistant wallet.
 
+## Install tools outside of node env
+1. To install Rust and Cargo, follow [this link](https://doc.rust-lang.org/cargo/getting-started/installation.html#:~:text=Install%20Rust%20and%20Cargo,rustup%20will%20also%20install%20cargo%20.).
+2. To install wasm-pack, execute: `cargo install wasm-pack`.
+3. Install Docker Engine/Desktop.
+
 ## How to use
 
 ```shell
@@ -19,9 +24,6 @@ npm run build
 # Deploy the web app to your github
 npm run deploy
 ```
-
-## For testing and contribution
- - prerequisites: Docker
 
 ## Usage Example 1 - Creating a new wallet with a new seed phrase.
 

@@ -14,11 +14,9 @@ import {
 import { Reader } from "ckb-js-toolkit";
 import { scriptToAddress } from "@nervosnetwork/ckb-sdk-utils";
 import { CellCollector, Indexer } from "@ckb-lumos/ckb-indexer";
-import { Script, HashType, utils, Transaction } from "@ckb-lumos/base";
+import { Script, HashType, Transaction } from "@ckb-lumos/base";
 import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
-import * as bip39 from "@scure/bip39";
-import { wordlist } from "@scure/bip39/wordlists/english";
 import __wbg_init, { KeyVault } from "../../key-vault/pkg/key_vault";
 import { CKBSphincsPlusHasher } from "./hasher";
 
@@ -154,14 +152,6 @@ export default class QuantumPurse {
       this.accountPointer +
       serializedSpxSig.replace(/^0x/, "");
     return sealTransaction(tx, [fullCkbQrSig]);
-  }
-
-  /**
-   * Generates a 24-word seed phrase with 256-bit security using BIP-39.
-   * @returns A mnemonic seed phrase as a string.
-   */
-  public static generateSeedPhrase(): string {
-    return bip39.generateMnemonic(wordlist, 256);
   }
 
   /**

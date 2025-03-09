@@ -1,8 +1,7 @@
 import { execSync } from "child_process";
 import { transfer } from "../core/transaction_builder";
 import QuantumPurse from "../core/quantum_purse";
-import { sendTransaction } from "../core/utils";
-import { utf8ToBytes } from "@noble/hashes/utils";
+import { sendTransaction, utf8ToBytes } from "../core/utils";
 import * as config from "../core/config";
 import { utils } from "@ckb-lumos/base";
 import { readFileSync } from "fs";
