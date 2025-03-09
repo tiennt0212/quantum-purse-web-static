@@ -1,4 +1,4 @@
-# QuantumPurse 0.0.1
+# QuantumPurse
 A CKB quantum resistant wallet.
 
 ## How to use
