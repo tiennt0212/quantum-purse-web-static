@@ -523,7 +523,7 @@ impl KeyVault {
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let mut seed = decrypt(&password, payload)?.to_vec();
 
-        let path = format!("pq/ckb/{}", Self::get_all_sphincs_pub().await?.len());
+        let path = format!("ckb/quantum-purse/sphincs-plus/{}", Self::get_all_sphincs_pub().await?.len());
         let mut sphincs_seed = vec![0u8; 32];
         let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
         scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)

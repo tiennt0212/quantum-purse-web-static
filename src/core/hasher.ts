@@ -42,10 +42,10 @@ class CKBSphincsPlusHasher {
   }
 }
 
-function ckbSpxHash(data: BytesLike): Hash {
-  const hasher = new CKBSphincsPlusHasher();
-  hasher.update(bytes.bytify(data));
-  return hasher.digestHex();
-}
+// function ckbSpxHash(data: BytesLike): Hash {
+//   const hasher = new CKBSphincsPlusHasher();
+//   hasher.update(bytes.bytify(data));
+//   return hasher.digestHex();
+// }
 
-export { CKBSphincsPlusHasher, ckbSpxHash };
+export { CKBSphincsPlusHasher };

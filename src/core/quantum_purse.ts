@@ -20,7 +20,7 @@ import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
 import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import __wbg_init, { KeyVault } from "../../key-vault/pkg/key_vault";
-import { CKBSphincsPlusHasher } from "./ckb_spx_hasher";
+import { CKBSphincsPlusHasher } from "./hasher";
 
 /**
  * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple)
