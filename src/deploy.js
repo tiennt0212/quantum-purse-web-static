@@ -5,5 +5,6 @@ ghpages.publish('dist', function(err) {
     console.error('Deploy failed! \n' + err)
   }
 
-  console.log('Deployed successfully!')
+  console.log('Deployed successfully!');
+  console.log('Now go to https://<your-github-username>.github.io/quantum-purse-web-static/ !');
 });
