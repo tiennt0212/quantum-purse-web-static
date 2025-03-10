@@ -38,6 +38,9 @@ use zeroize::Zeroize;
 mod errors;
 use crate::errors::KeyVaultError;
 
+mod secure_vec;
+use secure_vec::SecureVec;
+
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -276,22 +279,11 @@ async fn clear_object_store(db: &Database, store_name: &str) -> Result<(), KeyVa
 /// - `length: usize` - The number of random bytes to generate.
 ///
 /// **Returns**:
-/// - `Result<Vec<u8>, String>` - A vector of random bytes on success, or an error message on failure.
-fn get_random_bytes(length: usize) -> Result<Vec<u8>, String> {
-    let mut buffer = vec![0u8; length];
-    getrandom(buffer.as_mut_slice()).map_err(|e| e.to_string())?;
+/// - `Result<SecureVec, String>` - A vector of random bytes on success, or an error message on failure.
+fn get_random_bytes(length: usize) -> Result<SecureVec, String> {
+    let mut buffer = SecureVec::new_with_length(length);
+    getrandom(&mut buffer).map_err(|e| e.to_string())?;
     Ok(buffer)
-}
-
-/// Generates a new BIP39 mnemonic seed phrase.
-///
-/// **Returns**:
-/// - `Mnemonic` - A BIP39 mnemonic phrase generated from 256-bit entropy.
-fn gen_seed_phrase() -> Mnemonic {
-    let mut entropy = get_random_bytes(32).unwrap(); // 256-bit entropy
-    let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
-    entropy.zeroize();
-    mnemonic
 }
 
 /// Encrypts data using AES-GCM with a password-derived key.
@@ -311,7 +303,7 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
     salt.copy_from_slice(&random_bytes[0..SALT_LENGTH]);
     iv.copy_from_slice(&random_bytes[SALT_LENGTH..]);
 
-    let mut scrypt_key = vec![0u8; 32];
+    let mut scrypt_key = SecureVec::new_with_length(32);
     let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
     scrypt(password, &salt, &scrypt_param, &mut scrypt_key)
         .map_err(|e| format!("Scrypt error: {:?}", e))?;
@@ -348,7 +340,7 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let cipher_text =
         decode(payload.cipher_text).map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
 
-    let mut scrypt_key = vec![0u8; 32];
+    let mut scrypt_key = SecureVec::new_with_length(32);
     let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
     scrypt(password, &salt, &scrypt_param, &mut scrypt_key)
         .map_err(|e| format!("Scrypt error: {:?}", e))?;
@@ -358,9 +350,7 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let nonce = Nonce::from_slice(&iv);
     let decipher = cipher
         .decrypt(nonce, cipher_text.as_ref())
-        .map_err(|e| format!("Decryption error: {:?}", e))?;
-
-    scrypt_key.zeroize();
+        .map_err(|e| format!("Decryption error: {:?}", scrypt_key))?;
 
     Ok(decipher)
 }
@@ -487,14 +477,16 @@ impl KeyVault {
             debug!("[INFO]: Mnemonic phrase exists");
             Ok(())
         } else {
-            let mut mnemonic = gen_seed_phrase();
+            let entropy = get_random_bytes(32).unwrap(); // 256-bit entropy
+            let mut mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
+            
             // let mut seed = mnemonic.to_seed("");
-            let mut password = password.to_vec();
+            let password = SecureVec::from_slice(&password.to_vec());
             let encrypted_seed = encrypt(&password, mnemonic.to_string().as_bytes())
                 .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
 
-            mnemonic.zeroize();
-            password.zeroize();
+            mnemonic.zeroize(); // todo verify & remove
+
             set_encrypted_mnemonic_phrase(encrypted_seed)
                 .await
                 .map_err(|e| e.to_jsvalue())?;
@@ -515,31 +507,31 @@ impl KeyVault {
     /// **Async**: Yes
     #[wasm_bindgen]
     pub async fn gen_new_key_pair(password: Uint8Array) -> Result<JsValue, JsValue> {
-        let mut password = password.to_vec();
+        let password = SecureVec::from_slice(&password.to_vec());
 
         let payload = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
-        let mut seed = decrypt(&password, payload)?.to_vec();
+        let seed = SecureVec::from_slice(&decrypt(&password, payload)?.to_vec());
 
         let path = format!(
             "ckb/quantum-purse/sphincs-plus/{}",
             Self::get_all_sphincs_pub().await?.len()
         );
-        let mut sphincs_seed = vec![0u8; 32];
+        let mut sphincs_seed = SecureVec::new_with_length(32);
         let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
         scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
             .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
 
         let mut rng = rand_chacha::ChaCha8Rng::from_seed(
-            sphincs_seed
+            (&*sphincs_seed)
                 .try_into()
                 .expect("Slice with incorrect length"),
         );
         let (pub_key, pri_key) = slh_dsa_shake_128f::try_keygen_with_rng(&mut rng)?;
         let pub_key_clone = pub_key.clone();
-        let mut pri_key_bytes = pri_key.into_bytes();
+        let pri_key_bytes = SecureVec::from_slice(&pri_key.into_bytes());
         let encrypted_pri = encrypt(&password, &pri_key_bytes)?;
 
         let pair = SphincsPlusKeyPair {
@@ -550,10 +542,7 @@ impl KeyVault {
 
         add_key_pair(pair).await.map_err(|e| e.to_jsvalue())?;
 
-        seed.zeroize();
-        password.zeroize();
-        pri_key_bytes.zeroize();
-        // TODO check if can shred rng
+        // TODO check if can zeroize rng
 
         Ok(JsValue::from_str(&encode(pub_key_clone.into_bytes())))
     }
@@ -577,11 +566,9 @@ impl KeyVault {
         password: Uint8Array,
     ) -> Result<(), JsValue> {
         // TODO verify valid seed/ or do it in js side
-        let mut password = password.to_vec();
-        let mut mnemonic = seed_phrase.to_vec();
+        let password = SecureVec::from_slice(&password.to_vec());
+        let mnemonic = SecureVec::from_slice(&seed_phrase.to_vec());
         let encrypted_seed = encrypt(&password, &mnemonic)?;
-        password.zeroize();
-        mnemonic.zeroize();
         set_encrypted_mnemonic_phrase(encrypted_seed)
             .await
             .map_err(|e| e.to_jsvalue())?;
@@ -602,13 +589,12 @@ impl KeyVault {
     /// **Warning**: Exporting the mnemonic exposes it in JavaScript, which may pose a security risk.
     #[wasm_bindgen]
     pub async fn export_seed_phrase(password: Uint8Array) -> Result<Uint8Array, JsValue> {
-        let mut password = password.to_vec();
+        let password = SecureVec::from_slice(&password.to_vec());
         let payload = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let mnemonic = decrypt(&password, payload)?;
-        password.zeroize();
         Ok(Uint8Array::from(mnemonic.as_slice()))
     }
 
@@ -630,7 +616,7 @@ impl KeyVault {
         sphincs_plus_pub: String,
         message: Uint8Array,
     ) -> Result<Uint8Array, JsValue> {
-        let mut password = password.to_vec();
+        let password = SecureVec::from_slice(&password.to_vec());
         let pair = get_key_pair(&sphincs_plus_pub)
             .await
             .map_err(|e| e.to_jsvalue())?
@@ -643,8 +629,7 @@ impl KeyVault {
         )
         .map_err(|e| JsValue::from_str(&format!("Unable to load private key: {:?}", e)))?;
         let signature = signing_key.try_sign(&message.to_vec(), &[], true)?;
-        password.zeroize();
-        signing_key.zeroize();
+        signing_key.zeroize(); // TODO check the neccesity
         Ok(Uint8Array::from(signature.as_slice()))
     }
 }
