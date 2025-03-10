@@ -35,8 +35,12 @@ export default class QuantumPurse {
   private PUBKEY_NUM = "01";
   private FLAG = "6d";
 
-  static readonly SPX_SIG_LEN: number = 17088; // sphincs+ shake-128f simple signature len
-  public accountPointer?: string; // sphincs+ public key corresponding to the encrypted private key in DB
+  // sphincs+ shake-128f simple signature len
+  private SPX_SIG_LEN: number = 17088;
+
+  // accounts infor
+  public accountPointer?: string; // a sphincs+ public key
+
   private static instance: QuantumPurse | null = null; // Singleton instance
 
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
@@ -74,9 +78,11 @@ export default class QuantumPurse {
 
     const hasher = new CKBSphincsPlusHasher();
     hasher.update("0x" + this.spxAllInOneSetupHashInput());
-    hasher.update("0x" + ((parseInt(this.FLAG, 16) >> 1) << 1).toString(16).padStart(2, '0'));
+    hasher.update(
+      "0x" + ((parseInt(this.FLAG, 16) >> 1) << 1).toString(16).padStart(2, "0")
+    );
     hasher.update("0x" + this.accountPointer);
-    
+
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
@@ -131,8 +137,7 @@ export default class QuantumPurse {
     if (!this.accountPointer) throw new Error("Account pointer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN +
-      hexStringToUint8Array(this.accountPointer).length;
+      this.SPX_SIG_LEN + hexStringToUint8Array(this.accountPointer).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
