@@ -350,7 +350,7 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let nonce = Nonce::from_slice(&iv);
     let decipher = cipher
         .decrypt(nonce, cipher_text.as_ref())
-        .map_err(|e| format!("Decryption error: {:?}", scrypt_key))?;
+        .map_err(|e| format!("Decryption error: {:?}", e))?;
 
     Ok(decipher)
 }
