@@ -22,27 +22,25 @@ import { CKBSphincsPlusHasher } from "./hasher";
 
 /**
  * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple)
- * on the Nervos CKB blockchain. Implements a singleton pattern to ensure a single instance.
- *
- * This class provides functionality for generating accounts, signing transactions,
+ * on the Nervos CKB blockchain. This class provides functionality for generating accounts, signing transactions,
  * managing seed phrases, and interacting with the blockchain.
  */
 export default class QuantumPurse {
-  // all in one lock script configuration
   private MULTISIG_ID = "80";
   private REQUIRE_FISRT_N = "00";
   private THRESHOLD = "01";
-  private PUBKEY_NUM = "01";
+  private PUBKEY_NUM = "01"; // 1 pubkey (personal lock)
+  /*             6d
+   *-----------------------------
+   *   [0110110]  |      [1]
+   *-----------------------------
+   * shake128f-id | signature-flag
+  */
   private FLAG = "6d";
-
-  // sphincs+ shake-128f simple signature len
-  private SPX_SIG_LEN: number = 17088;
-
-  // accounts infor
-  public accountPointer?: string; // a sphincs+ public key
-
+  private SPX_SIG_LEN: number = 17088; //shake128f sig len
   private static instance: QuantumPurse | null = null; // Singleton instance
 
+  public accountPointer?: string; // a sphincs+ public key
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
 
   /** Constructor that takes sphincs+ on-chain binary deployment info */
@@ -62,8 +60,8 @@ export default class QuantumPurse {
    * @returns The singleton instance of QuantumPurse.
    */
   public static async getInstance(): Promise<QuantumPurse> {
-    await __wbg_init();
     if (!QuantumPurse.instance) {
+      await __wbg_init();
       QuantumPurse.instance = new QuantumPurse(
         SPHINCSPLUS_LOCK.codeHash,
         SPHINCSPLUS_LOCK.hashType as HashType

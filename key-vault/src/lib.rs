@@ -70,6 +70,7 @@ pub struct CipherPayload {
 /// - `index: u32` - db addition order
 /// - `pub_key: String` - Hex-encoded SPHINCS+ public key.
 /// - `pri_enc: CipherPayload` - Encrypted SPHINCS+ private key, stored as a `CipherPayload`.
+/// TODO improve size
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SphincsPlusKeyPair {
     index: u32,
@@ -472,7 +473,6 @@ impl KeyVault {
     /// **Note**: Only effective when the mnemonic phrase is not yet set.
     #[wasm_bindgen]
     pub async fn key_init(password: Uint8Array) -> Result<(), JsValue> {
-        // TODO try deleting password in js side from here
         let stored_seed = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?;
@@ -488,7 +488,7 @@ impl KeyVault {
             let encrypted_seed = encrypt(&password, mnemonic.to_string().as_bytes())
                 .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
 
-            mnemonic.zeroize(); // todo verify & remove
+            mnemonic.zeroize(); // todo verify zeroize on drop
 
             set_encrypted_mnemonic_phrase(encrypted_seed)
                 .await
@@ -545,7 +545,7 @@ impl KeyVault {
 
         add_key_pair(pair).await.map_err(|e| e.to_jsvalue())?;
 
-        // TODO check if can zeroize rng
+        // TODO check rng
 
         Ok(JsValue::from_str(&encode(pub_key_clone.into_bytes())))
     }
@@ -628,11 +628,11 @@ impl KeyVault {
         // TODO check to zerolize pri_key_bytes when panic at try_into()
         let pri_key_bytes = decrypt(&password, pair.pri_enc)?.to_vec();
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
-            &pri_key_bytes.try_into().expect("Fail to parse private key"),
+            &pri_key_bytes.try_into().expect("Fail to parse private key")
         )
         .map_err(|e| JsValue::from_str(&format!("Unable to load private key: {:?}", e)))?;
         let signature = signing_key.try_sign(&message.to_vec(), &[], true)?;
-        signing_key.zeroize(); // TODO check the neccesity
+        signing_key.zeroize(); // TODO check zeroize on drop
         Ok(Uint8Array::from(signature.as_slice()))
     }
 }
