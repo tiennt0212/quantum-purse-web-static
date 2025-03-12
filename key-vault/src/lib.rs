@@ -9,6 +9,9 @@
 //! Scrypt with the mnemonic as the password and a derivation path as the salt, and signing messages
 //! with the SPHINCS+ private keys.
 
+#[cfg(test)]
+mod tests;
+
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
