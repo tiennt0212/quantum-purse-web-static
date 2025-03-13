@@ -340,7 +340,7 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
 /// - `Result<Vec<u8>, String>` - The decrypted plaintext on success, or an error message on failure.
 ///
 /// Warning: Proper zeroization of passwords and inputs is the responsibility of the caller.
-fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
+fn decrypt(password: &[u8], payload: CipherPayload) -> Result<SecureVec, String> {
     let salt = decode(payload.salt).map_err(|e| format!("Salt decode error: {:?}", e))?;
     let iv = decode(payload.iv).map_err(|e| format!("IV decode error: {:?}", e))?;
     let cipher_text =
@@ -354,11 +354,13 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<Vec<u8>, String> {
     let aes_key: &Key<Aes256Gcm> = Key::<Aes256Gcm>::from_slice(&scrypt_key);
     let cipher = Aes256Gcm::new(aes_key);
     let nonce = Nonce::from_slice(&iv);
-    let decipher = cipher
+    let mut decipher = cipher
         .decrypt(nonce, cipher_text.as_ref())
         .map_err(|e| format!("Decryption error: {:?}", e))?;
 
-    Ok(decipher)
+    let secure_decipher = SecureVec::from_slice(&decipher);
+    decipher.zeroize();
+    Ok(secure_decipher)
 }
 
 #[wasm_bindgen]
@@ -619,7 +621,7 @@ impl KeyVault {
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
-        let seed = SecureVec::from_slice(&decrypt(&password, payload)?.to_vec());
+        let seed = decrypt(&password, payload)?;
 
         let path = format!(
             "ckb/quantum-purse/sphincs-plus/{}",
@@ -701,7 +703,7 @@ impl KeyVault {
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let mnemonic = decrypt(&password, payload)?;
-        Ok(Uint8Array::from(mnemonic.as_slice()))
+        Ok(Uint8Array::from(mnemonic.as_ref()))
     }
 
     /// Signs a message using the SPHINCS+ private key after decrypting it with the provided password.
@@ -729,12 +731,16 @@ impl KeyVault {
             .unwrap();
 
         // TODO check to zerolize pri_key_bytes when panic at try_into()
-        let pri_key_bytes = decrypt(&password, pair.pri_enc)?.to_vec();
+        let pri_key = decrypt(&password, pair.pri_enc)?;
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
-            &pri_key_bytes.try_into().expect("Fail to parse private key"),
+            pri_key
+                .as_ref()
+                .try_into()
+                .expect("Fail to parse private key"),
         )
         .map_err(|e| JsValue::from_str(&format!("Unable to load private key: {:?}", e)))?;
         let signature = signing_key.try_sign(&message.to_vec(), &[], true)?;
+
         signing_key.zeroize(); // TODO check zeroize on drop
         Ok(Uint8Array::from(signature.as_slice()))
     }
