@@ -36,7 +36,7 @@ export default class QuantumPurse {
    *-----------------------------
    * shake128f-id | signature-flag
   */
-  private FLAG = "6d";
+  private QR_LOCK_FLAGS = "6d";
   private SPX_SIG_LEN: number = 17088; //shake128f sig len
   private static instance: QuantumPurse | null = null; // Singleton instance
 
@@ -85,7 +85,7 @@ export default class QuantumPurse {
     const hasher = new CKBSphincsPlusHasher();
     hasher.update("0x" + this.spxAllInOneSetupHashInput());
     hasher.update(
-      "0x" + ((parseInt(this.FLAG, 16) >> 1) << 1).toString(16).padStart(2, "0")
+      "0x" + ((parseInt(this.QR_LOCK_FLAGS, 16) >> 1) << 1).toString(16).padStart(2, "0")
     );
     hasher.update("0x" + pointer);
   
@@ -162,7 +162,7 @@ export default class QuantumPurse {
     const fullCkbQrSig =
       "0x" +
       this.spxAllInOneSetupHashInput() +
-      this.FLAG +
+      this.QR_LOCK_FLAGS +
       this.accountPointer +
       serializedSpxSig.replace(/^0x/, "");
     return sealTransaction(tx, [fullCkbQrSig]);
