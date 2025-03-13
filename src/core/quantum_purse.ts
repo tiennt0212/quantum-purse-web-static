@@ -14,33 +14,33 @@ import {
 import { Reader } from "ckb-js-toolkit";
 import { scriptToAddress } from "@nervosnetwork/ckb-sdk-utils";
 import { CellCollector, Indexer } from "@ckb-lumos/ckb-indexer";
-import { Script, HashType, utils, Transaction } from "@ckb-lumos/base";
+import { Script, HashType, Transaction } from "@ckb-lumos/base";
 import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
-import * as bip39 from "@scure/bip39";
-import { wordlist } from "@scure/bip39/wordlists/english";
-import __wbg_init, { KeyVault } from "../../key-vault/pkg/key_vault";
+import __wbg_init, { KeyVault, Util as KeyVaultUtil } from "../../key-vault/pkg/key_vault";
 import { CKBSphincsPlusHasher } from "./hasher";
 
 /**
  * Manages a wallet using the SPHINCS+ post-quantum signature scheme (shake-128f simple)
- * on the Nervos CKB blockchain. Implements a singleton pattern to ensure a single instance.
- *
- * This class provides functionality for generating accounts, signing transactions,
+ * on the Nervos CKB blockchain. This class provides functionality for generating accounts, signing transactions,
  * managing seed phrases, and interacting with the blockchain.
  */
 export default class QuantumPurse {
-  // all in one lock script configuration
   private MULTISIG_ID = "80";
   private REQUIRE_FISRT_N = "00";
   private THRESHOLD = "01";
-  private PUBKEY_NUM = "01";
-  private FLAG = "6d";
-
-  static readonly SPX_SIG_LEN: number = 17088; // sphincs+ shake-128f simple signature len
-  public accountPointer?: string; // sphincs+ public key corresponding to the encrypted private key in DB
+  private PUBKEY_NUM = "01"; // 1 pubkey (personal lock)
+  /*             6d
+   *-----------------------------
+   *   [0110110]  |      [1]
+   *-----------------------------
+   * shake128f-id | signature-flag
+  */
+  private QR_LOCK_FLAGS = "6d";
+  private SPX_SIG_LEN: number = 17088; //shake128f sig len
   private static instance: QuantumPurse | null = null; // Singleton instance
 
+  public accountPointer?: string; // a sphincs+ public key
   public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
 
   /** Constructor that takes sphincs+ on-chain binary deployment info */
@@ -60,8 +60,8 @@ export default class QuantumPurse {
    * @returns The singleton instance of QuantumPurse.
    */
   public static async getInstance(): Promise<QuantumPurse> {
-    await __wbg_init();
     if (!QuantumPurse.instance) {
+      await __wbg_init();
       QuantumPurse.instance = new QuantumPurse(
         SPHINCSPLUS_LOCK.codeHash,
         SPHINCSPLUS_LOCK.hashType as HashType
@@ -70,15 +70,25 @@ export default class QuantumPurse {
     return QuantumPurse.instance;
   }
 
-  /** Generates the ckb lock script for the current account. */
-  public getLock(): Script {
-    if (!this.accountPointer) throw new Error("Account pointer not available!");
-
+  /**
+   * Gets the CKB lock script.
+   * @param sphincsPlusPubKey - The sphincs+ public key to get a lock script from.
+   * @returns The CKB lock script (an asset lock in CKB blockchain).
+   * @throws Error if no account pointer is set by default.
+   */
+  public getLock(sphincsPlusPubKey?: string): Script {
+    const pointer = sphincsPlusPubKey !== undefined ? sphincsPlusPubKey : this.accountPointer;
+    if (!pointer || pointer === '') {
+      throw new Error("Account pointer not available!");
+    }
+  
     const hasher = new CKBSphincsPlusHasher();
     hasher.update("0x" + this.spxAllInOneSetupHashInput());
-    hasher.update("0x" + ((parseInt(this.FLAG, 16) >> 1) << 1).toString(16).padStart(2, '0'));
-    hasher.update("0x" + this.accountPointer);
-    
+    hasher.update(
+      "0x" + ((parseInt(this.QR_LOCK_FLAGS, 16) >> 1) << 1).toString(16).padStart(2, "0")
+    );
+    hasher.update("0x" + pointer);
+  
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
@@ -87,23 +97,26 @@ export default class QuantumPurse {
   }
 
   /**
-   * Gets the blockchain address for the current account.
+   * Gets the blockchain address.
+   * @param sphincsPlusPubKey - The sphincs+ public key to get an address from.
    * @returns The CKB address as a string.
-   * @throws Error if no account is set (see `getLock` for details).
+   * @throws Error if no account pointer is set by default (see `getLock` for details).
    */
-  public getAddress(): string {
-    const lock = this.getLock();
+  public getAddress(sphincsPlusPubKey?: string): string {
+    const lock = sphincsPlusPubKey !== undefined ? this.getLock(sphincsPlusPubKey) : this.getLock();
     return scriptToAddress(lock, IS_MAIN_NET);
   }
 
   /**
    * Calculates the wallet's balance on the Nervos CKB blockchain.
+   * @param sphincsPlusPubKey - The sphincs+ public key to get an address from which a balance is retrieved.
    * @returns A promise resolving to the balance in BigInt (in shannons).
    * @throws Error if no account is set (see `getLock` for details).
    */
-  public async getBalance(): Promise<bigint> {
+  public async getBalance(sphincsPlusPubKey?: string): Promise<bigint> {
+    const lock = sphincsPlusPubKey !== undefined ? this.getLock(sphincsPlusPubKey) : this.getLock();
     const query: CKBIndexerQueryOptions = {
-      lock: this.getLock(),
+      lock: lock,
       type: "empty",
     };
     const cellCollector = new CellCollector(
@@ -111,7 +124,7 @@ export default class QuantumPurse {
       query
     );
     let balance = BigInt(0);
-
+  
     for await (const cell of cellCollector.collect()) {
       balance += hexToInt(cell.cellOutput.capacity);
     }
@@ -133,8 +146,7 @@ export default class QuantumPurse {
     if (!this.accountPointer) throw new Error("Account pointer not available!");
 
     const witnessLen =
-      QuantumPurse.SPX_SIG_LEN +
-      hexStringToUint8Array(this.accountPointer).length;
+      this.SPX_SIG_LEN + hexStringToUint8Array(this.accountPointer).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
@@ -150,18 +162,10 @@ export default class QuantumPurse {
     const fullCkbQrSig =
       "0x" +
       this.spxAllInOneSetupHashInput() +
-      this.FLAG +
+      this.QR_LOCK_FLAGS +
       this.accountPointer +
       serializedSpxSig.replace(/^0x/, "");
     return sealTransaction(tx, [fullCkbQrSig]);
-  }
-
-  /**
-   * Generates a 24-word seed phrase with 256-bit security using BIP-39.
-   * @returns A mnemonic seed phrase as a string.
-   */
-  public static generateSeedPhrase(): string {
-    return bip39.generateMnemonic(wordlist, 256);
   }
 
   /**
@@ -201,49 +205,8 @@ export default class QuantumPurse {
    * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
    * @remark The input password is overwritten with zeros after calculation.
    */
-  public static calculateEntropy(password: Uint8Array): number {
-    if (!password || password.length === 0) {
-      return 0;
-    }
-
-    const length = password.length;
-    let hasLower = false,
-      hasUpper = false,
-      hasDigit = false,
-      hasSymbol = false,
-      hasNonAscii = false;
-    for (let i = 0; i < length; i++) {
-      const byte = password[i];
-      if (byte >= 97 && byte <= 122) hasLower = true; // a-z
-      else if (byte >= 65 && byte <= 90) hasUpper = true; // A-Z
-      else if (byte >= 48 && byte <= 57) hasDigit = true; // 0-9
-      else if (
-        (byte >= 33 && byte <= 47) ||
-        (byte >= 58 && byte <= 64) ||
-        (byte >= 91 && byte <= 96) ||
-        (byte >= 123 && byte <= 126)
-      )
-        hasSymbol = true; // !-/ : @-` {~}
-      else if (byte > 127) hasNonAscii = true; // UTF-8 multi-byte
-    }
-
-    let poolSize = 0;
-    if (hasLower) poolSize += 26; // Lowercase
-    if (hasUpper) poolSize += 26; // Uppercase
-    if (hasDigit) poolSize += 10; // Digits
-    if (hasSymbol) poolSize += 32; // Symbols
-
-    if (poolSize === 0) {
-      poolSize = 1; // Minimum pool for all-same or uncategorized bytes (e.g., "aaa")
-    }
-    if (hasNonAscii) {
-      poolSize = Math.max(poolSize, 94); // Minimum for full printable ASCII
-      poolSize = Math.min(poolSize, 256); // Cap at byte max for UTF-8
-    }
-
-    const entropy = Math.floor(length * Math.log2(poolSize));
-    password.fill(0);
-    return entropy;
+  public static checkPassword(password: Uint8Array): number {
+    return KeyVaultUtil.password_checker(password);
   }
 
   /**
