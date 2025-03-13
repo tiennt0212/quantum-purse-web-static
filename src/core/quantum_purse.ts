@@ -70,17 +70,25 @@ export default class QuantumPurse {
     return QuantumPurse.instance;
   }
 
-  /** Generates the ckb lock script for the current account. */
-  public getLock(): Script {
-    if (!this.accountPointer) throw new Error("Account pointer not available!");
-
+  /**
+   * Gets the CKB lock script.
+   * @param accPtr - The account pointer (a sphincs+ public key) to get a lock script from.
+   * @returns The CKB lock script (an asset lock in CKB blockchain).
+   * @throws Error if no account pointer is set by default.
+   */
+  public getLock(accPtr?: string): Script {
+    const pointer = accPtr !== undefined ? accPtr : this.accountPointer;
+    if (!pointer || pointer === '') {
+      throw new Error("Account pointer not available!");
+    }
+  
     const hasher = new CKBSphincsPlusHasher();
     hasher.update("0x" + this.spxAllInOneSetupHashInput());
     hasher.update(
       "0x" + ((parseInt(this.FLAG, 16) >> 1) << 1).toString(16).padStart(2, "0")
     );
-    hasher.update("0x" + this.accountPointer);
-
+    hasher.update("0x" + pointer);
+  
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
@@ -89,23 +97,26 @@ export default class QuantumPurse {
   }
 
   /**
-   * Gets the blockchain address for the current account.
+   * Gets the blockchain address.
+   * @param accPtr - The account pointer (a sphincs+ public key) to get an address from.
    * @returns The CKB address as a string.
-   * @throws Error if no account is set (see `getLock` for details).
+   * @throws Error if no account pointer is set by default (see `getLock` for details).
    */
-  public getAddress(): string {
-    const lock = this.getLock();
+  public getAddress(accPtr?: string): string {
+    const lock = accPtr !== undefined ? this.getLock(accPtr) : this.getLock();
     return scriptToAddress(lock, IS_MAIN_NET);
   }
 
   /**
    * Calculates the wallet's balance on the Nervos CKB blockchain.
+   * @param accPtr - The account pointer (a sphincs+ public key) to get an address from which a balance is retrieved.
    * @returns A promise resolving to the balance in BigInt (in shannons).
    * @throws Error if no account is set (see `getLock` for details).
    */
-  public async getBalance(): Promise<bigint> {
+  public async getBalance(accPtr?: string): Promise<bigint> {
+    const lock = accPtr !== undefined ? this.getLock(accPtr) : this.getLock();
     const query: CKBIndexerQueryOptions = {
-      lock: this.getLock(),
+      lock: lock,
       type: "empty",
     };
     const cellCollector = new CellCollector(
@@ -113,7 +124,7 @@ export default class QuantumPurse {
       query
     );
     let balance = BigInt(0);
-
+  
     for await (const cell of cellCollector.collect()) {
       balance += hexToInt(cell.cellOutput.capacity);
     }
