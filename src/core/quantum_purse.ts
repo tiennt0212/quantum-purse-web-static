@@ -72,12 +72,12 @@ export default class QuantumPurse {
 
   /**
    * Gets the CKB lock script.
-   * @param accPtr - The account pointer (a sphincs+ public key) to get a lock script from.
+   * @param sphincsPlusPubKey - The sphincs+ public key to get a lock script from.
    * @returns The CKB lock script (an asset lock in CKB blockchain).
    * @throws Error if no account pointer is set by default.
    */
-  public getLock(accPtr?: string): Script {
-    const pointer = accPtr !== undefined ? accPtr : this.accountPointer;
+  public getLock(sphincsPlusPubKey?: string): Script {
+    const pointer = sphincsPlusPubKey !== undefined ? sphincsPlusPubKey : this.accountPointer;
     if (!pointer || pointer === '') {
       throw new Error("Account pointer not available!");
     }
@@ -98,23 +98,23 @@ export default class QuantumPurse {
 
   /**
    * Gets the blockchain address.
-   * @param accPtr - The account pointer (a sphincs+ public key) to get an address from.
+   * @param sphincsPlusPubKey - The sphincs+ public key to get an address from.
    * @returns The CKB address as a string.
    * @throws Error if no account pointer is set by default (see `getLock` for details).
    */
-  public getAddress(accPtr?: string): string {
-    const lock = accPtr !== undefined ? this.getLock(accPtr) : this.getLock();
+  public getAddress(sphincsPlusPubKey?: string): string {
+    const lock = sphincsPlusPubKey !== undefined ? this.getLock(sphincsPlusPubKey) : this.getLock();
     return scriptToAddress(lock, IS_MAIN_NET);
   }
 
   /**
    * Calculates the wallet's balance on the Nervos CKB blockchain.
-   * @param accPtr - The account pointer (a sphincs+ public key) to get an address from which a balance is retrieved.
+   * @param sphincsPlusPubKey - The sphincs+ public key to get an address from which a balance is retrieved.
    * @returns A promise resolving to the balance in BigInt (in shannons).
    * @throws Error if no account is set (see `getLock` for details).
    */
-  public async getBalance(accPtr?: string): Promise<bigint> {
-    const lock = accPtr !== undefined ? this.getLock(accPtr) : this.getLock();
+  public async getBalance(sphincsPlusPubKey?: string): Promise<bigint> {
+    const lock = sphincsPlusPubKey !== undefined ? this.getLock(sphincsPlusPubKey) : this.getLock();
     const query: CKBIndexerQueryOptions = {
       lock: lock,
       type: "empty",
