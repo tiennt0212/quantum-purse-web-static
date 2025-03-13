@@ -17,7 +17,7 @@ import { CellCollector, Indexer } from "@ckb-lumos/ckb-indexer";
 import { Script, HashType, Transaction } from "@ckb-lumos/base";
 import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
-import __wbg_init, { KeyVault } from "../../key-vault/pkg/key_vault";
+import __wbg_init, { KeyVault, Util as KeyVaultUtil } from "../../key-vault/pkg/key_vault";
 import { CKBSphincsPlusHasher } from "./hasher";
 
 /**
@@ -194,49 +194,8 @@ export default class QuantumPurse {
    * @returns The entropy in bits (e.g., 1, 2, 128, 256, 444, etc.), or 0 for invalid/empty input.
    * @remark The input password is overwritten with zeros after calculation.
    */
-  public static calculateEntropy(password: Uint8Array): number {
-    if (!password || password.length === 0) {
-      return 0;
-    }
-
-    const length = password.length;
-    let hasLower = false,
-      hasUpper = false,
-      hasDigit = false,
-      hasSymbol = false,
-      hasNonAscii = false;
-    for (let i = 0; i < length; i++) {
-      const byte = password[i];
-      if (byte >= 97 && byte <= 122) hasLower = true; // a-z
-      else if (byte >= 65 && byte <= 90) hasUpper = true; // A-Z
-      else if (byte >= 48 && byte <= 57) hasDigit = true; // 0-9
-      else if (
-        (byte >= 33 && byte <= 47) ||
-        (byte >= 58 && byte <= 64) ||
-        (byte >= 91 && byte <= 96) ||
-        (byte >= 123 && byte <= 126)
-      )
-        hasSymbol = true; // !-/ : @-` {~}
-      else if (byte > 127) hasNonAscii = true; // UTF-8 multi-byte
-    }
-
-    let poolSize = 0;
-    if (hasLower) poolSize += 26; // Lowercase
-    if (hasUpper) poolSize += 26; // Uppercase
-    if (hasDigit) poolSize += 10; // Digits
-    if (hasSymbol) poolSize += 32; // Symbols
-
-    if (poolSize === 0) {
-      poolSize = 1; // Minimum pool for all-same or uncategorized bytes (e.g., "aaa")
-    }
-    if (hasNonAscii) {
-      poolSize = Math.max(poolSize, 94); // Minimum for full printable ASCII
-      poolSize = Math.min(poolSize, 256); // Cap at byte max for UTF-8
-    }
-
-    const entropy = Math.floor(length * Math.log2(poolSize));
-    password.fill(0);
-    return entropy;
+  public static checkPassword(password: Uint8Array): number {
+    return KeyVaultUtil.password_checker(password);
   }
 
   /**

@@ -22,8 +22,10 @@ use ckb_fips205_utils::{
     Hasher,
 };
 use ckb_mock_tx_types::{MockTransaction, ReprMockTransaction};
-use fips205::slh_dsa_shake_128f;
-use fips205::traits::{SerDes, Signer};
+use fips205::{
+    slh_dsa_shake_128f,
+    traits::{SerDes, Signer},
+};
 use getrandom::getrandom;
 use hex::{decode, encode};
 use indexed_db_futures::{
@@ -387,6 +389,107 @@ impl Util {
         let message = message_hasher.hash();
         Ok(Uint8Array::from(message.as_slice()))
     }
+
+    /// Measure bit strength of a password
+    ///
+    /// **Parameters**:
+    /// - `password: Uint8Array` - utf8 serialized password.
+    ///
+    /// **Returns**:
+    /// - `Result<u16, JsValue>` - The strength of the password measured in bit on success,
+    ///   or a JavaScript error on failure.
+    ///
+    /// **Async**: no
+    #[wasm_bindgen]
+    pub fn password_checker(password: Uint8Array) -> Result<u32, JsValue> {
+        let password = SecureVec::from_slice(&password.to_vec());
+        let password_str =
+            std::str::from_utf8(&password).map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        if password_str.is_empty() {
+            return Ok(0);
+        }
+
+        let mut has_lowercase = false;
+        let mut has_uppercase = false;
+        let mut has_digit = false;
+        let mut has_punctuation = false;
+        let mut has_space = false;
+        let mut has_other = false;
+
+        for c in password_str.chars() {
+            if c == ' ' {
+                has_space = true;
+            } else if c.is_ascii_lowercase() {
+                has_lowercase = true;
+            } else if c.is_ascii_uppercase() {
+                has_uppercase = true;
+            } else if c.is_ascii_digit() {
+                has_digit = true;
+            } else if c.is_ascii_punctuation() {
+                has_punctuation = true;
+            } else {
+                has_other = true;
+            }
+        }
+
+        if !has_uppercase {
+            return Err(JsValue::from_str(
+                "Password must contain at least one uppercase letter!",
+            ));
+        }
+        if !has_lowercase {
+            return Err(JsValue::from_str(
+                "Password must contain at least one lowercase letter!",
+            ));
+        }
+        if !has_digit {
+            return Err(JsValue::from_str(
+                "Password must contain at least one digit!",
+            ));
+        }
+        if !has_punctuation {
+            return Err(JsValue::from_str(
+                "Password must contain at least one symbol!",
+            ));
+        }
+
+        let character_set_size = if has_other {
+            256
+        } else {
+            let mut size = 0;
+            if has_lowercase {
+                size += 26;
+            } // a-z
+            if has_uppercase {
+                size += 26;
+            } // A-Z
+            if has_digit {
+                size += 10;
+            } // 0-9
+            if has_punctuation {
+                size += 32;
+            } // ASCII punctuation
+            if has_space {
+                size += 1;
+            } // Space character
+            size
+        };
+
+        if character_set_size == 0 {
+            return Ok(0);
+        }
+
+        let entropy = (password_str.len() as f64) * (character_set_size as f64).log2();
+        let rounded_entropy = entropy.round() as u32;
+
+        if rounded_entropy < 256 {
+            return Err(JsValue::from_str(
+                "Password entropy must be at least 256 bit. Consider lengthening your password!",
+            ));
+        }
+        Ok(rounded_entropy)
+    }
 }
 
 #[wasm_bindgen]
@@ -482,7 +585,7 @@ impl KeyVault {
         } else {
             let entropy = get_random_bytes(32).unwrap(); // 256-bit entropy
             let mut mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).unwrap();
-            
+
             // let mut seed = mnemonic.to_seed("");
             let password = SecureVec::from_slice(&password.to_vec());
             let encrypted_seed = encrypt(&password, mnemonic.to_string().as_bytes())
@@ -628,7 +731,7 @@ impl KeyVault {
         // TODO check to zerolize pri_key_bytes when panic at try_into()
         let pri_key_bytes = decrypt(&password, pair.pri_enc)?.to_vec();
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
-            &pri_key_bytes.try_into().expect("Fail to parse private key")
+            &pri_key_bytes.try_into().expect("Fail to parse private key"),
         )
         .map_err(|e| JsValue::from_str(&format!("Unable to load private key: {:?}", e)))?;
         let signature = signing_key.try_sign(&message.to_vec(), &[], true)?;
