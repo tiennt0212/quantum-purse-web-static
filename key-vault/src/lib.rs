@@ -4,13 +4,7 @@
 //! QuantumPurse using WebAssembly. It leverages AES-GCM for encryption, Scrypt for key derivation,
 //! and the SPHINCS+ signature scheme for post-quantum transaction signing. Sensitive data, including
 //! the BIP39 mnemonic and derived SPHINCS+ private keys, is encrypted and stored in the browser via
-//! IndexedDB, with access authenticated by user-provided passwords. The module supports generating
-//! a BIP39 mnemonic, storing it encrypted, deriving SPHINCS+ child key pairs from the mnemonic using
-//! Scrypt with the mnemonic as the password and a derivation path as the salt, and signing messages
-//! with the SPHINCS+ private keys.
-
-#[cfg(test)]
-mod tests;
+//! IndexedDB, with access authenticated by user-provided passwords.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -46,6 +40,9 @@ use crate::errors::KeyVaultError;
 mod secure_vec;
 use secure_vec::SecureVec;
 
+#[cfg(test)]
+mod tests;
+
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -80,13 +77,19 @@ pub struct SphincsPlusKeyPair {
     pri_enc: CipherPayload,
 }
 
-/// Creating a namespace in js side for key-vault functions.
+/// Creating namespaces for the generated js interface.
 #[wasm_bindgen]
 pub struct KeyVault;
-
-/// Creating a namespace in js side for get_ckb_tx_message_all
 #[wasm_bindgen]
 pub struct Util;
+
+/// Scrypt param structure.
+struct ScryptParam {
+    log_n: u8,
+    r: u32,
+    p: u32,
+    len: usize,
+}
 
 // Constants
 const SALT_LENGTH: usize = 16; // 128-bit salt
@@ -96,6 +99,14 @@ const SEED_PHRASE_KEY: &str = "seed_phrase";
 const SEED_PHRASE_STORE: &str = "seed_phrase_store";
 const CHILD_KEYS_STORE: &str = "child_keys_store";
 const KDF_PATH_PREFIX: &str = "ckb/quantum-purse/sphincs-plus/";
+/// Used for both child key derivation and encryption/decryption
+/// TODO: Adjust scrypt parameters for security/performance
+const SCRYPT_PARAM: ScryptParam = ScryptParam {
+    log_n: 14,
+    r: 8,
+    p: 1,
+    len: 32,
+};
 
 /// Opens the IndexedDB database, creating object stores if necessary.
 ///
@@ -311,7 +322,13 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
     iv.copy_from_slice(&random_bytes[SALT_LENGTH..]);
 
     let mut scrypt_key = SecureVec::new_with_length(32);
-    let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
+    let scrypt_param = Params::new(
+        SCRYPT_PARAM.log_n,
+        SCRYPT_PARAM.r,
+        SCRYPT_PARAM.p,
+        SCRYPT_PARAM.len,
+    )
+    .unwrap();
     scrypt(password, &salt, &scrypt_param, &mut scrypt_key)
         .map_err(|e| format!("Scrypt error: {:?}", e))?;
 
@@ -346,7 +363,13 @@ fn decrypt(password: &[u8], payload: CipherPayload) -> Result<SecureVec, String>
         decode(payload.cipher_text).map_err(|e| format!("Ciphertext decode error: {:?}", e))?;
 
     let mut scrypt_key = SecureVec::new_with_length(32);
-    let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
+    let scrypt_param = Params::new(
+        SCRYPT_PARAM.log_n,
+        SCRYPT_PARAM.r,
+        SCRYPT_PARAM.p,
+        SCRYPT_PARAM.len,
+    )
+    .unwrap();
     scrypt(password, &salt, &scrypt_param, &mut scrypt_key)
         .map_err(|e| format!("Scrypt error: {:?}", e))?;
 
@@ -630,7 +653,13 @@ impl KeyVault {
             Self::get_all_sphincs_pub().await?.len()
         );
         let mut sphincs_seed = SecureVec::new_with_length(32);
-        let scrypt_param = Params::new(14, 8, 1, 32).unwrap(); // TODO: Adjust parameters for security/performance
+        let scrypt_param = Params::new(
+            SCRYPT_PARAM.log_n,
+            SCRYPT_PARAM.r,
+            SCRYPT_PARAM.p,
+            SCRYPT_PARAM.len,
+        )
+        .unwrap();
         scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
             .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
 
