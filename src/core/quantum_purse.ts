@@ -190,7 +190,7 @@ export default class QuantumPurse {
   }
 
   /**
-   * Generates a new account derived from the master seed and sets it as the current account.
+   * Generates a new account derived from the master seed.
    * @param password - The password to decrypt the master seed and encrypt the child key (will be zeroed out).
    * @returns A promise that resolves when the account is generated and set.
    * @throws Error if the master seed is not found or decryption fails.
@@ -198,7 +198,6 @@ export default class QuantumPurse {
    */
   public async genAccount(password: Uint8Array): Promise<void> {
     const sphincs_pub = await KeyVault.gen_new_key_pair(password);
-    await this.setAccPointer(sphincs_pub);
     password.fill(0);
   }
 

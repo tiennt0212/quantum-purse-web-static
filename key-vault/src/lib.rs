@@ -95,6 +95,7 @@ const DB_NAME: &str = "quantum_purse";
 const SEED_PHRASE_KEY: &str = "seed_phrase";
 const SEED_PHRASE_STORE: &str = "seed_phrase_store";
 const CHILD_KEYS_STORE: &str = "child_keys_store";
+const KDF_PATH_PREFIX: &str = "ckb/quantum-purse/sphincs-plus/";
 
 /// Opens the IndexedDB database, creating object stores if necessary.
 ///
@@ -320,8 +321,6 @@ fn encrypt(password: &[u8], input: &[u8]) -> Result<CipherPayload, String> {
     let cipher_text = cipher
         .encrypt(nonce, input)
         .map_err(|e| format!("Encryption error: {:?}", e))?;
-
-    scrypt_key.zeroize();
 
     Ok(CipherPayload {
         salt: encode(salt),
@@ -593,7 +592,7 @@ impl KeyVault {
             let encrypted_seed = encrypt(&password, mnemonic.to_string().as_bytes())
                 .map_err(|e| JsValue::from_str(&format!("Encryption error: {}", e)))?;
 
-            mnemonic.zeroize(); // todo verify zeroize on drop
+            mnemonic.zeroize(); // TODO verify zeroize on drop
 
             set_encrypted_mnemonic_phrase(encrypted_seed)
                 .await
@@ -617,14 +616,17 @@ impl KeyVault {
     pub async fn gen_new_key_pair(password: Uint8Array) -> Result<JsValue, JsValue> {
         let password = SecureVec::from_slice(&password.to_vec());
 
+        // Get and decrypt the mnemonic seed phrase
         let payload = get_encrypted_mnemonic_phrase()
             .await
             .map_err(|e| e.to_jsvalue())?
             .ok_or_else(|| JsValue::from_str("Mnemonic phrase not found"))?;
         let seed = decrypt(&password, payload)?;
 
+        // Key derivation with Scrypt
         let path = format!(
-            "ckb/quantum-purse/sphincs-plus/{}",
+            "{}{}",
+            KDF_PATH_PREFIX,
             Self::get_all_sphincs_pub().await?.len()
         );
         let mut sphincs_seed = SecureVec::new_with_length(32);
@@ -632,6 +634,7 @@ impl KeyVault {
         scrypt(&seed, path.as_bytes(), &scrypt_param, &mut sphincs_seed)
             .map_err(|e| JsValue::from_str(&format!("Scrypt error: {:?}", e)))?;
 
+        // SPHINCS+ key gen and encryption
         let mut rng = rand_chacha::ChaCha8Rng::from_seed(
             (&*sphincs_seed)
                 .try_into()
@@ -642,6 +645,7 @@ impl KeyVault {
         let pri_key_bytes = SecureVec::from_slice(&pri_key.into_bytes());
         let encrypted_pri = encrypt(&password, &pri_key_bytes)?;
 
+        // Store to DB
         let pair = SphincsPlusKeyPair {
             index: 0, // Init to 0; Will be set correctly in add_key_pair
             pub_key: encode(pub_key.into_bytes()),
@@ -730,7 +734,6 @@ impl KeyVault {
             .map_err(|e| e.to_jsvalue())?
             .unwrap();
 
-        // TODO check to zerolize pri_key_bytes when panic at try_into()
         let pri_key = decrypt(&password, pair.pri_enc)?;
         let mut signing_key = slh_dsa_shake_128f::PrivateKey::try_from_bytes(
             pri_key

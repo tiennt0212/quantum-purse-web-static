@@ -6,7 +6,7 @@ fn test_pass_encrypt_decrypt() {
   let data = b"test";
   let payload = encrypt(&password, data).unwrap();
   let decrypted = decrypt(&password, payload).unwrap();
-  assert_eq!(decrypted, data);
+  assert_eq!(decrypted.as_ref(), data);
 }
 
 #[test]
