@@ -80,9 +80,9 @@ export default class QuantumPurse {
    * @throws Error if no account pointer is set by default.
    */
   public getLock(sphincsPlusPubKey?: string): Script {
-    const pointer =
+    const accPointer =
       sphincsPlusPubKey !== undefined ? sphincsPlusPubKey : this.accountPointer;
-    if (!pointer || pointer === "") {
+    if (!accPointer || accPointer === "") {
       throw new Error("Account pointer not available!");
     }
 
@@ -94,7 +94,7 @@ export default class QuantumPurse {
           .toString(16)
           .padStart(2, "0")
     );
-    hasher.update("0x" + pointer);
+    hasher.update("0x" + accPointer);
 
     return {
       codeHash: this.sphincsLock.codeHash,
@@ -148,18 +148,24 @@ export default class QuantumPurse {
    * Signs a Nervos CKB transaction using the SPHINCS+ signature scheme.
    * @param tx - The transaction skeleton to sign.
    * @param password - The password to decrypt the private key (will be zeroed out after use).
+   * @param sphincsPlusPubKey - The sphincs+ public key to get a lock script from.
    * @returns A promise resolving to the signed transaction.
    * @throws Error if no account is set or decryption fails.
    * @remark The password and sensitive data are overwritten with zeros after use.
    */
   public async sign(
     tx: TransactionSkeletonType,
-    password: Uint8Array
+    password: Uint8Array,
+    sphincsPlusPubKey?: string
   ): Promise<Transaction> {
-    if (!this.accountPointer) throw new Error("Account pointer not available!");
+    const accPointer =
+      sphincsPlusPubKey !== undefined ? sphincsPlusPubKey : this.accountPointer;
+    if (!accPointer || accPointer === "") {
+      throw new Error("Account pointer not available!");
+    }
 
     const witnessLen =
-      this.SPX_SIG_LEN + hexStringToUint8Array(this.accountPointer).length;
+      this.SPX_SIG_LEN + hexStringToUint8Array(accPointer).length;
     tx = insertWitnessPlaceHolder(tx, witnessLen);
     tx = prepareSphincsPlusSigningEntries(tx);
 
@@ -167,7 +173,7 @@ export default class QuantumPurse {
 
     const spxSig = await KeyVault.sign(
       password,
-      this.accountPointer,
+      accPointer,
       hexStringToUint8Array(signingEntries[0].message)
     );
     const serializedSpxSig = new Reader(spxSig.buffer).serializeJson();
@@ -176,7 +182,7 @@ export default class QuantumPurse {
       "0x" +
       this.spxAllInOneSetupHashInput() +
       this.QR_LOCK_FLAGS +
-      this.accountPointer +
+      accPointer +
       serializedSpxSig.replace(/^0x/, "");
     return sealTransaction(tx, [fullCkbQrSig]);
   }
