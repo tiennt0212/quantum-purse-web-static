@@ -17,7 +17,10 @@ import { CellCollector, Indexer } from "@ckb-lumos/ckb-indexer";
 import { Script, HashType, Transaction } from "@ckb-lumos/base";
 import { CKBIndexerQueryOptions } from "@ckb-lumos/ckb-indexer/src/type";
 import { TransactionSkeletonType, sealTransaction } from "@ckb-lumos/helpers";
-import __wbg_init, { KeyVault, Util as KeyVaultUtil } from "../../key-vault/pkg/key_vault";
+import __wbg_init, {
+  KeyVault,
+  Util as KeyVaultUtil,
+} from "../../key-vault/pkg/key_vault";
 import { CKBSphincsPlusHasher } from "./hasher";
 
 /**
@@ -35,20 +38,20 @@ export default class QuantumPurse {
    *   [0110110]  |      [1]
    *-----------------------------
    * shake128f-id | signature-flag
-  */
+   */
   private QR_LOCK_FLAGS = "6d";
-  private SPX_SIG_LEN: number = 17088; //shake128f sig len
-  private static instance: QuantumPurse | null = null; // Singleton instance
+  private SPX_SIG_LEN: number = 17088;
+  private static instance: QuantumPurse | null = null;
 
   public accountPointer?: string; // a sphincs+ public key
-  public sphincsLock: { codeHash: string; hashType: HashType }; // SPHINCS+ lock script
+  public sphincsLock: { codeHash: string; hashType: HashType };
 
   /** Constructor that takes sphincs+ on-chain binary deployment info */
   private constructor(sphincsCodeHash: string, sphincsHashType: HashType) {
     this.sphincsLock = { codeHash: sphincsCodeHash, hashType: sphincsHashType };
   }
 
-  // conjugate the first 4 bytes of the witness.lock for the hasher
+  /** Conjugate the first 4 bytes of the witness.lock for the hasher */
   private spxAllInOneSetupHashInput(): string {
     return (
       this.MULTISIG_ID + this.REQUIRE_FISRT_N + this.THRESHOLD + this.PUBKEY_NUM
@@ -77,18 +80,22 @@ export default class QuantumPurse {
    * @throws Error if no account pointer is set by default.
    */
   public getLock(sphincsPlusPubKey?: string): Script {
-    const pointer = sphincsPlusPubKey !== undefined ? sphincsPlusPubKey : this.accountPointer;
-    if (!pointer || pointer === '') {
+    const pointer =
+      sphincsPlusPubKey !== undefined ? sphincsPlusPubKey : this.accountPointer;
+    if (!pointer || pointer === "") {
       throw new Error("Account pointer not available!");
     }
-  
+
     const hasher = new CKBSphincsPlusHasher();
     hasher.update("0x" + this.spxAllInOneSetupHashInput());
     hasher.update(
-      "0x" + ((parseInt(this.QR_LOCK_FLAGS, 16) >> 1) << 1).toString(16).padStart(2, "0")
+      "0x" +
+        ((parseInt(this.QR_LOCK_FLAGS, 16) >> 1) << 1)
+          .toString(16)
+          .padStart(2, "0")
     );
     hasher.update("0x" + pointer);
-  
+
     return {
       codeHash: this.sphincsLock.codeHash,
       hashType: this.sphincsLock.hashType,
@@ -103,7 +110,10 @@ export default class QuantumPurse {
    * @throws Error if no account pointer is set by default (see `getLock` for details).
    */
   public getAddress(sphincsPlusPubKey?: string): string {
-    const lock = sphincsPlusPubKey !== undefined ? this.getLock(sphincsPlusPubKey) : this.getLock();
+    const lock =
+      sphincsPlusPubKey !== undefined
+        ? this.getLock(sphincsPlusPubKey)
+        : this.getLock();
     return scriptToAddress(lock, IS_MAIN_NET);
   }
 
@@ -114,7 +124,10 @@ export default class QuantumPurse {
    * @throws Error if no account is set (see `getLock` for details).
    */
   public async getBalance(sphincsPlusPubKey?: string): Promise<bigint> {
-    const lock = sphincsPlusPubKey !== undefined ? this.getLock(sphincsPlusPubKey) : this.getLock();
+    const lock =
+      sphincsPlusPubKey !== undefined
+        ? this.getLock(sphincsPlusPubKey)
+        : this.getLock();
     const query: CKBIndexerQueryOptions = {
       lock: lock,
       type: "empty",
@@ -124,7 +137,7 @@ export default class QuantumPurse {
       query
     );
     let balance = BigInt(0);
-  
+
     for await (const cell of cellCollector.collect()) {
       balance += hexToInt(cell.cellOutput.capacity);
     }
@@ -177,7 +190,7 @@ export default class QuantumPurse {
   }
 
   /**
-   * Generates a new account derived from the master seed and sets it as the current account.
+   * Generates a new account derived from the master seed.
    * @param password - The password to decrypt the master seed and encrypt the child key (will be zeroed out).
    * @returns A promise that resolves when the account is generated and set.
    * @throws Error if the master seed is not found or decryption fails.
@@ -185,7 +198,6 @@ export default class QuantumPurse {
    */
   public async genAccount(password: Uint8Array): Promise<void> {
     const sphincs_pub = await KeyVault.gen_new_key_pair(password);
-    await this.setAccPointer(sphincs_pub);
     password.fill(0);
   }
 
